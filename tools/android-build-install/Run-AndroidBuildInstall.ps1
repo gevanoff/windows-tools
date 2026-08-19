@@ -44,15 +44,19 @@ Write-Host "Detailed log: $logPath"
 Write-Host ''
 
 $previousPreference = $ErrorActionPreference
+$exitCode = 1
 
 try {
-    # Run the implementation in a child PowerShell process. This turns all
-    # Gradle/adb stdout and stderr into ordinary text that Tee-Object can both
-    # display and persist, avoiding Windows PowerShell 5.1 native-stderr quirks.
+    # Run the implementation in a child PowerShell process so all Gradle/adb
+    # stdout and stderr arrive as ordinary text. Write every line to both the
+    # console and the persistent log without relying on newer Tee-Object flags.
     $ErrorActionPreference = 'Continue'
     & powershell.exe @childArguments 2>&1 |
-        ForEach-Object { "$_" } |
-        Tee-Object -FilePath $logPath -Append
+        ForEach-Object {
+            $line = "$_"
+            Write-Host $line
+            Add-Content -LiteralPath $logPath -Encoding UTF8 -Value $line
+        }
     $exitCode = $LASTEXITCODE
 }
 finally {
