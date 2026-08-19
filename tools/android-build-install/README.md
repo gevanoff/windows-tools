@@ -23,12 +23,17 @@ The project itself remains responsible for its normal Gradle dependencies and An
 1. Connect the Android device by USB.
 2. Unlock the device and approve the USB debugging prompt if Android displays one.
 3. Double-click `Build-And-Install-Android.bat`.
-4. Choose the repository or Android project folder.
-5. The tool builds the debug APK and installs it on the connected device.
+4. Choose a remembered repository from the project list.
+5. Click **Build** or double-click the project.
+6. The tool builds the debug APK and installs it on the connected device.
+
+Use **Add...** in the chooser to browse for another repository and remember it. Use **Remove** to delete a path from the remembered list without changing the repository itself.
 
 ### Drag and drop
 
 Drag an Android repository or project folder onto `Build-And-Install-Android.bat` in File Explorer.
+
+The dragged path is used immediately and is also added to the saved-project list for future double-click launches.
 
 This works with both layouts currently used by the projects this utility was designed around:
 
@@ -48,6 +53,18 @@ prism-break/
 ```
 
 The tool looks for `gradlew.bat` in the selected directory and up to two directory levels below it. If more than one Gradle project is found, it asks which one to build.
+
+## Saved projects
+
+The normal launcher remembers repository paths in:
+
+```text
+%LOCALAPPDATA%\WindowsTools\android-build-install\projects.json
+```
+
+Saved paths are per Windows user and remain outside the Git repository, so pulling or changing `windows-tools` does not overwrite the list.
+
+The most recently selected or dragged project is moved to the top of the list. Paths that no longer exist are omitted from the chooser; they can be added again after the repository is moved or restored.
 
 ## Build and install behavior
 
@@ -132,7 +149,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -Project "C:\src\chatturanga"
 ```
 
-Direct implementation calls do not use the launcher-level persistent log wrapper. For troubleshooting, use `Build-And-Install-Android.bat` or `Run-AndroidBuildInstall.ps1`.
+Direct implementation calls do not use the launcher-level persistent project list or log wrapper. For the saved-project chooser and troubleshooting logs, use `Build-And-Install-Android.bat` or `Run-AndroidBuildInstall.ps1`.
 
 Specify a different Gradle assemble task:
 
@@ -159,13 +176,13 @@ Target a particular attached device:
 - never uninstalls an existing Android application automatically;
 - uses `adb install -r` so successful updates normally retain app data;
 - returns a nonzero exit code when building or installation fails;
-- preserves console/build diagnostics to a timestamped log when launched normally.
+- preserves console/build diagnostics to a timestamped log when launched normally;
+- stores only local repository paths in the saved-project list.
 
 ## Possible future improvements
 
 - optionally launch the installed app after installation;
-- remember recently used project folders;
-- add a graphical project/device chooser instead of console selection when multiple choices exist;
+- add a graphical device chooser instead of console selection when multiple devices exist;
 - optionally run project tests before installation;
 - support saved per-project Gradle task/JDK preferences;
 - support Android App Bundle workflows when needed.
