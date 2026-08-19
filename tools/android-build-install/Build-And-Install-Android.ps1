@@ -89,14 +89,14 @@ function Invoke-NativeCaptured {
     )
 
     # Windows PowerShell 5.1 can represent native stderr as PowerShell error
-    # records. Temporarily use Continue so normal stderr (for example, adb
-    # daemon startup messages) does not become a terminating error.
+    # records. Use Continue temporarily so normal native stderr is captured
+    # rather than promoted to a terminating PowerShell error.
     $previousPreference = $ErrorActionPreference
 
     try {
         $ErrorActionPreference = 'Continue'
         $output = & $FilePath @Arguments 2>&1
-        $exitCode = $LASTEXITCODE
+        $exitCode = [int]$LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $previousPreference
@@ -105,24 +105,6 @@ function Invoke-NativeCaptured {
     return [pscustomobject]@{
         ExitCode = $exitCode
         Output = @($output)
-    }
-}
-
-function Invoke-NativeStreaming {
-    param(
-        [Parameter(Mandatory = $true)][string]$FilePath,
-        [string[]]$Arguments = @()
-    )
-
-    $previousPreference = $ErrorActionPreference
-
-    try {
-        $ErrorActionPreference = 'Continue'
-        & $FilePath @Arguments
-        return $LASTEXITCODE
-    }
-    finally {
-        $ErrorActionPreference = $previousPreference
     }
 }
 
@@ -433,9 +415,21 @@ try {
     try {
         Write-Host "Running: gradlew.bat $GradleTask --stacktrace"
         Write-Host ''
-        $gradleExitCode = Invoke-NativeStreaming `
-            -FilePath $gradlew `
-            -Arguments @($GradleTask, '--stacktrace')
+
+        # Run Gradle directly in the main script scope. Do not wrap this call in
+        # a function whose success output is captured by assignment: PowerShell
+        # functions emit all pipeline output as return data, which previously
+        # caused Gradle's console text plus exit code 0 to become an array and be
+        # misclassified as a failed build.
+        $previousPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $gradlew $GradleTask '--stacktrace'
+            $gradleExitCode = [int]$LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousPreference
+        }
     }
     finally {
         Pop-Location
