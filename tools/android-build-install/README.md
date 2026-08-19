@@ -1,114 +1,159 @@
 # Android Build and Install
 
-Build an Android project with its Gradle wrapper and install the resulting debug APK on an Android device connected to a Windows 11 desktop.
-
-The tool is intended for quick physical-device testing of local Android projects without requiring `adb` to already be available on the PowerShell `PATH`.
+Build Android projects with their Gradle wrappers, install debug APKs on a connected Android device, compare installed APKs with local builds, update repositories from Git, and keep per-project build preferences from one Windows 11 launcher.
 
 ## Requirements
 
 - Windows 11
 - Windows PowerShell 5.1 or later
+- Git for Windows for the **Git Pull** action
 - an Android project containing `gradlew.bat`
-- a JDK compatible with that project's Gradle/Android Gradle Plugin versions
+- a JDK compatible with the project's Gradle / Android Gradle Plugin versions
 - Android SDK Platform-Tools (`adb.exe`)
-- Android SDK Build-Tools (`aapt2.exe`) for device APK scanning
+- Android SDK Build-Tools (`aapt2.exe` or `aapt.exe`) for package inspection and auto-launch
 - an Android device with USB debugging enabled
-- the appropriate Windows USB driver for the device, when one is required
+- the appropriate Windows USB driver when the device requires one
 
-The project itself remains responsible for its normal Gradle dependencies and Android SDK components.
+The project remains responsible for its normal Gradle dependencies and Android SDK components.
 
-## Use
+## Normal workflow
 
-### Double-click
+1. Connect and unlock the Android device.
+2. Double-click `Build-And-Install-Android.bat`.
+3. Select a remembered repository.
+4. Use any of the available actions:
+   - **Build** — build, install, and optionally launch the project;
+   - **Git Pull** — safely fast-forward the selected clean repository;
+   - **Settings...** — configure persistent project-specific build defaults;
+   - **Scan Device...** — compare saved projects' local APKs with installed copies;
+   - **Reports...** — inspect previous build/install logs;
+   - **Add... / Remove** — manage remembered repository paths.
+5. After a build/install run finishes, the chooser returns so another action can be performed without restarting the launcher.
 
-1. Connect the Android device by USB.
-2. Unlock the device and approve the USB debugging prompt if Android displays one.
-3. Double-click `Build-And-Install-Android.bat`.
-4. Choose a remembered repository from the project list.
-5. Click **Build** or double-click the project.
-6. The tool builds the debug APK and installs it on the connected device.
-7. After the run finishes, the project chooser returns so another project can be built without restarting the launcher.
+Double-clicking a project is equivalent to selecting it and clicking **Build**.
 
-Use **Add...** to browse for another repository and remember it. Use **Remove** to delete a path from the remembered list without changing the repository itself. Use **Reports...** to inspect previous build/install runs. Use **Scan Device...** to compare saved projects' existing local debug APKs with the copies installed on the attached Android device.
-
-### Drag and drop
+## Drag and drop
 
 Drag an Android repository or project folder onto `Build-And-Install-Android.bat` in File Explorer.
 
-The dragged path is used immediately and is also added to the saved-project list. After that build finishes, the normal project chooser opens for additional work.
+The dragged path is used immediately, remembered for future sessions, and built using any saved per-project settings. After the run finishes, the normal project chooser opens.
 
-This works with both root-level Android layouts:
+Both root-level and nested Android layouts are supported. For example:
 
 ```text
 chatturanga/
     gradlew.bat
-    ...
 ```
 
-and repositories where Android lives in a subdirectory:
+and:
 
 ```text
 prism-break/
     android/
         gradlew.bat
-        ...
 ```
 
-The tool looks for `gradlew.bat` in the selected directory and up to two directory levels below it. If more than one Gradle project is found, it asks which one to build.
+The tool searches for `gradlew.bat` in the selected directory and up to two directory levels below it. If multiple Gradle roots exist, it asks which one to build.
 
 ## Saved projects
 
-The launcher remembers repository paths in:
+Remembered repository paths are stored per Windows user at:
 
 ```text
 %LOCALAPPDATA%\WindowsTools\android-build-install\projects.json
 ```
 
-Saved paths are per Windows user and remain outside the Git repository, so pulling or changing `windows-tools` does not overwrite the list.
+The most recently used project moves to the top. Paths that no longer exist are omitted from the chooser. Removing a project from the chooser does not modify or delete the repository.
 
-The most recently selected or dragged project is moved to the top of the list. Paths that no longer exist are omitted from the chooser; they can be added again after the repository is moved or restored.
+## Per-project settings
 
-## Device APK scan
+Click **Settings...** for the selected project. Settings are stored outside Git at:
 
-Click **Scan Device...** from the project chooser to compare each saved project's latest existing local debug APK against the installed application on the connected device.
+```text
+%LOCALAPPDATA%\WindowsTools\android-build-install\project-preferences.json
+```
 
-The scan does **not** rebuild projects and does not modify the device. For each saved project it:
+Available settings are:
 
-1. locates the Gradle project and its existing debug APK output;
-2. prefers a unique conventional `app\build\outputs\apk\debug\app-debug.apk` when several APKs exist;
-3. uses Android Build-Tools (`aapt2`, with `aapt` fallback) to read the APK package ID;
-4. asks the device for that package's installed APK path;
-5. when there is one pullable installed APK, temporarily pulls it to the Windows temp directory;
-6. compares local and installed APKs using SHA-256;
-7. deletes the temporary pulled APK after hashing.
+### Gradle task
 
-The results window reports:
+Default:
 
-- **Same** — the installed APK and local APK have identical SHA-256 hashes;
-- **Different** — the same package is installed, but its APK bytes differ from the local APK;
-- **Not installed** — the local APK's package is not installed on the device;
-- **No local build** — there is no existing APK to compare;
-- **Unknown** — an exact comparison is ambiguous or unavailable, such as multiple local APK targets, multiple Gradle roots, a split-APK installation, missing Build-Tools, or an installed APK that cannot be pulled.
+```text
+assembleDebug
+```
 
-**Same** and **Different** mean exact comparison with the APK currently on disk; they do not imply that the local APK was rebuilt from the latest source changes immediately before the scan.
+This can be changed for projects that use another assemble task, for example:
 
-If multiple authorized Android devices are connected, the current scan asks you to disconnect the extras or call `Scan-AndroidDevice.ps1` with `-DeviceSerial`. Normal build/install device selection remains unchanged.
+```text
+assembleDemoDebug
+```
+
+### Preferred APK
+
+When a project produces several debug APKs, a preferred APK can be stored so the tool does not ask which one to install on every run.
+
+The path can be absolute or relative to the saved repository path. Using a relative path is recommended because it remains valid if the entire repository tree is moved together.
+
+For Prism Break, the conventional preferred APK is:
+
+```text
+android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+If a configured preferred APK is not produced by the current build, the tool warns and falls back to the normal APK chooser rather than installing an arbitrary file.
+
+### JAVA_HOME
+
+A project-specific JDK directory can be selected. When configured, the tool sets `JAVA_HOME` for that build before invoking the project's Gradle wrapper.
+
+When blank, Java resolution follows the normal environment:
+
+1. existing `JAVA_HOME`;
+2. `java.exe` on `PATH`.
+
+### Auto-launch
+
+When enabled, a successful install is followed by an attempt to launch the installed package's launcher activity through ADB.
+
+The APK package ID is read with Android Build-Tools. Auto-launch failure is treated as a warning: the build/install still counts as successful because installation already completed.
+
+## Git Pull
+
+Select a project and click **Git Pull** to update its repository.
+
+The action deliberately uses:
+
+```text
+git pull --ff-only
+```
+
+and has conservative safety rules:
+
+- the selected path must be inside a Git repository;
+- the current branch must have an upstream tracking branch;
+- detached HEAD is rejected;
+- any tracked or untracked working-tree change causes the pull to stop;
+- no automatic stash, merge commit, reset, checkout, or conflict resolution is performed;
+- non-fast-forward pulls fail without changing history.
+
+This makes **Git Pull** suitable for quickly updating a clean local checkout while keeping any repository with local work explicit and under normal Git control.
 
 ## Build and install behavior
 
-By default the tool runs:
+The default build command is:
 
 ```text
 gradlew.bat assembleDebug --stacktrace
 ```
 
-After a successful build it searches Android module output directories for APKs under:
+After a successful build the tool searches Android module output directories under:
 
 ```text
 build\outputs\apk
 ```
 
-If there is one debug APK, it is selected automatically. If several debug APKs are present, the tool asks which one to install.
+If there is one debug APK it is selected automatically. When several exist, the saved preferred APK is used if it exactly matches a produced APK; otherwise the tool asks which one to install.
 
 Installation uses:
 
@@ -116,110 +161,105 @@ Installation uses:
 adb -s <device-serial> install -r <apk>
 ```
 
-`-r` replaces an existing installation while preserving its app data when Android permits the update.
+`-r` replaces an existing installation while preserving app data when Android permits the update.
 
-The tool does **not** automatically uninstall an existing app when signatures differ. Android reports this as `INSTALL_FAILED_UPDATE_INCOMPATIBLE`; uninstalling would normally remove the app's local data, so that action is left explicit.
+The tool does **not** automatically uninstall an app when Android reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Uninstalling normally removes local app data, so that remains an explicit user action.
+
+## Device scan
+
+Click **Scan Device...** to compare existing local debug APKs with packages currently installed on the attached device. The scan does not rebuild or install anything.
+
+Results are:
+
+- **Same** — local and installed APK SHA-256 hashes match exactly;
+- **Different** — the package is installed but its APK bytes differ from the local APK;
+- **Not installed** — the local APK's package is absent from the device;
+- **No local build** — no local APK exists yet;
+- **Unknown** — an exact comparison cannot safely be made.
+
+The scanner identifies package IDs using Android Build-Tools, queries the installed package with ADB, temporarily pulls a single installed APK when possible, computes SHA-256 hashes, and removes the temporary copy afterward.
+
+Split APK installations and ambiguous local APK sets are reported as **Unknown** rather than guessed. When several local APKs exist, the scanner recognizes one unique conventional `app\build\outputs\apk\debug\app-debug.apk` when present.
 
 ## Reports and failure logs
 
-Each launcher run is captured to a timestamped text report under:
+Each build/install run is recorded under:
 
 ```text
 %LOCALAPPDATA%\WindowsTools\android-build-install\logs
 ```
 
-The launcher shows build output in the console while also writing it to the report. Reports include the selected project, Gradle output, adb output, and final exit code.
+Reports include:
 
-From the project chooser, click **Reports...** to see recent runs with their timestamp, success/failure state, and project. A report can be opened directly in Notepad, or the entire reports folder can be opened in File Explorer.
+- selected project;
+- Gradle task;
+- preferred APK preference;
+- JDK override;
+- auto-launch setting;
+- Gradle output;
+- ADB install/launch output;
+- final exit code.
 
-If a run fails, its report also opens automatically in Notepad so the underlying Gradle or adb error is immediately available to copy.
+Use **Reports...** to browse and open previous runs. If a build/install fails, its report also opens automatically in Notepad.
 
-## Finding adb
+## Finding ADB
 
 The tool does not require `adb` to be on `PATH`. It checks, in order:
 
-1. `sdk.dir` in the selected Gradle project's `local.properties`
-2. `ANDROID_SDK_ROOT`
-3. `ANDROID_HOME`
-4. the standard Android Studio SDK location under `%LOCALAPPDATA%\Android\Sdk`
-5. `adb.exe` on `PATH`
-
-This avoids the common Windows situation where Android Studio can use `adb` but a normal PowerShell window cannot.
+1. `sdk.dir` in the selected Gradle project's `local.properties`;
+2. `ANDROID_SDK_ROOT`;
+3. `ANDROID_HOME`;
+4. `%LOCALAPPDATA%\Android\Sdk`;
+5. `adb.exe` on `PATH`.
 
 ## Device handling
 
-The build/install tool runs `adb devices -l` before building.
+Before building, the tool runs `adb devices -l`.
 
 - One authorized device: selected automatically.
-- Multiple authorized devices: asks which device to use.
-- Unauthorized device: asks you to unlock it and approve USB debugging.
-- Offline device: stops and asks you to reconnect or restart USB debugging.
+- Multiple authorized devices: asks which one to use.
+- Unauthorized device: stops and asks for USB debugging authorization.
+- Offline device: stops and asks for reconnection/restart of USB debugging.
 - No device: stops before building.
-
-You can also specify a serial explicitly with `-DeviceSerial` when calling the implementation directly.
-
-## Java
-
-The utility deliberately does not choose or change JDK versions automatically. Android projects can have materially different Gradle/JDK compatibility requirements.
-
-It uses:
-
-1. `JAVA_HOME`, when set and valid; otherwise
-2. `java.exe` from `PATH`.
-
-If a project's Gradle version rejects the selected Java runtime, use the JDK required by that project and run the utility again.
 
 ## Command-line use
 
-Run the implementation directly with the standard debug build:
+The compatibility entrypoint remains:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File .\Build-And-Install-Android.ps1 `
-    -Project "C:\src\chatturanga"
+.\Build-And-Install-Android.ps1 -Project "C:\src\chatturanga"
 ```
 
-Run a device comparison directly:
-
-```powershell
-.\Scan-AndroidDevice.ps1 `
-    -Project "C:\src\chatturanga", "C:\src\prism-break"
-```
-
-Direct build implementation calls do not use the session chooser or launcher-level persistent reports. For the normal interactive workflow, use `Build-And-Install-Android.bat`.
-
-Specify a different Gradle assemble task:
+Optional arguments include:
 
 ```powershell
 .\Build-And-Install-Android.ps1 `
     -Project "C:\src\some-app" `
-    -GradleTask "assembleDemoDebug"
+    -GradleTask "assembleDemoDebug" `
+    -PreferredApk "app\build\outputs\apk\demo\debug\app-demo-debug.apk" `
+    -JavaHome "C:\Program Files\Android\Android Studio\jbr" `
+    -AutoLaunch
 ```
 
-Target a particular attached device:
+A specific attached device can be selected with `-DeviceSerial`.
 
-```powershell
-.\Build-And-Install-Android.ps1 `
-    -Project "C:\src\some-app" `
-    -DeviceSerial "DEVICE_SERIAL"
-```
+Direct command-line calls do not use the saved-project chooser or launcher-level report browser.
 
 ## Safety characteristics
 
-- validates the selected project directory before building;
-- uses the project's own Gradle wrapper rather than a global Gradle installation;
-- stops before installation when the build fails;
-- stops before building when no usable Android device is connected;
-- never uninstalls an existing Android application automatically;
-- uses `adb install -r` so successful updates normally retain app data;
-- preserves console/build diagnostics to timestamped reports;
-- stores only local repository paths in the saved-project list;
-- device scanning is read-only except for a temporary APK copy on the Windows host, which is removed after hashing.
+- project source remains untouched by build/install operations;
+- each project uses its own Gradle wrapper;
+- installation never starts when Gradle fails;
+- the tool never automatically uninstalls an Android application;
+- `adb install -r` is used to preserve app data where Android permits it;
+- Git Pull refuses dirty worktrees and non-fast-forward updates;
+- device scanning is read-only except for a temporary local APK copy that is removed afterward;
+- saved projects and preferences live under the Windows user's local application-data directory, outside Git repositories;
+- build/install diagnostics are preserved as timestamped reports.
 
 ## Possible future improvements
 
-- optionally launch the installed app after installation;
-- add a graphical device chooser to the scanner when multiple devices are attached;
-- optionally run project tests before installation;
-- support saved per-project Gradle task/JDK/APK preferences;
-- support Android App Bundle workflows when needed.
+- optional test/lint tasks before installation;
+- graphical selection when multiple Android devices are attached;
+- a per-project option to run Git Pull automatically before building (kept off by default);
+- Android App Bundle workflows when needed.
