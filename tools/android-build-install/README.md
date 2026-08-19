@@ -26,16 +26,17 @@ The project itself remains responsible for its normal Gradle dependencies and An
 4. Choose a remembered repository from the project list.
 5. Click **Build** or double-click the project.
 6. The tool builds the debug APK and installs it on the connected device.
+7. After the run finishes, the project chooser returns so another project can be built without restarting the launcher.
 
-Use **Add...** in the chooser to browse for another repository and remember it. Use **Remove** to delete a path from the remembered list without changing the repository itself.
+Use **Add...** to browse for another repository and remember it. Use **Remove** to delete a path from the remembered list without changing the repository itself. Use **Reports...** to inspect previous build/install runs.
 
 ### Drag and drop
 
 Drag an Android repository or project folder onto `Build-And-Install-Android.bat` in File Explorer.
 
-The dragged path is used immediately and is also added to the saved-project list for future double-click launches.
+The dragged path is used immediately and is also added to the saved-project list. After that build finishes, the normal project chooser opens for additional work.
 
-This works with both layouts currently used by the projects this utility was designed around:
+This works with both root-level Android layouts:
 
 ```text
 chatturanga/
@@ -56,7 +57,7 @@ The tool looks for `gradlew.bat` in the selected directory and up to two directo
 
 ## Saved projects
 
-The normal launcher remembers repository paths in:
+The launcher remembers repository paths in:
 
 ```text
 %LOCALAPPDATA%\WindowsTools\android-build-install\projects.json
@@ -80,7 +81,7 @@ After a successful build it searches Android module output directories for APKs 
 build\outputs\apk
 ```
 
-If there is one debug APK, it is selected automatically. If several APKs are present, the tool asks which one to install.
+If there is one debug APK, it is selected automatically. If several debug APKs are present, the tool asks which one to install.
 
 Installation uses:
 
@@ -92,17 +93,19 @@ adb -s <device-serial> install -r <apk>
 
 The tool does **not** automatically uninstall an existing app when signatures differ. Android reports this as `INSTALL_FAILED_UPDATE_INCOMPATIBLE`; uninstalling would normally remove the app's local data, so that action is left explicit.
 
-## Failure logs
+## Reports and failure logs
 
-Runs started through `Build-And-Install-Android.bat` are captured to timestamped text logs under:
+Each launcher run is captured to a timestamped text report under:
 
 ```text
 %LOCALAPPDATA%\WindowsTools\android-build-install\logs
 ```
 
-The launcher still shows build output in the console while also writing it to the log. The log includes the selected project argument, tool output, Gradle output, adb output, and final exit code.
+The launcher shows build output in the console while also writing it to the report. Reports include the selected project, Gradle output, adb output, and final exit code.
 
-If a run fails, the latest log opens automatically in Notepad. This makes the actual Gradle or adb error easy to copy and share even when the console window is difficult to select or closes unexpectedly.
+From the project chooser, click **Reports...** to see recent runs with their timestamp, success/failure state, and project. A report can be opened directly in Notepad, or the entire reports folder can be opened in File Explorer.
+
+If a run fails, its report also opens automatically in Notepad so the underlying Gradle or adb error is immediately available to copy.
 
 ## Finding adb
 
@@ -114,7 +117,7 @@ The tool does not require `adb` to be on `PATH`. It checks, in order:
 4. the standard Android Studio SDK location under `%LOCALAPPDATA%\Android\Sdk`
 5. `adb.exe` on `PATH`
 
-This is intended to avoid the common Windows situation where Android Studio can use `adb` but a normal PowerShell window cannot.
+This avoids the common Windows situation where Android Studio can use `adb` but a normal PowerShell window cannot.
 
 ## Device handling
 
@@ -126,7 +129,7 @@ The tool runs `adb devices -l` before building.
 - Offline device: stops and asks you to reconnect or restart USB debugging.
 - No device: stops before building.
 
-You can also specify a serial explicitly with `-DeviceSerial`.
+You can also specify a serial explicitly with `-DeviceSerial` when calling the implementation directly.
 
 ## Java
 
@@ -149,7 +152,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -Project "C:\src\chatturanga"
 ```
 
-Direct implementation calls do not use the launcher-level persistent project list or log wrapper. For the saved-project chooser and troubleshooting logs, use `Build-And-Install-Android.bat` or `Run-AndroidBuildInstall.ps1`.
+Direct implementation calls do not use the session chooser or launcher-level persistent reports. For the normal interactive workflow, use `Build-And-Install-Android.bat`.
 
 Specify a different Gradle assemble task:
 
@@ -175,8 +178,7 @@ Target a particular attached device:
 - stops before building when no usable Android device is connected;
 - never uninstalls an existing Android application automatically;
 - uses `adb install -r` so successful updates normally retain app data;
-- returns a nonzero exit code when building or installation fails;
-- preserves console/build diagnostics to a timestamped log when launched normally;
+- preserves console/build diagnostics to timestamped reports;
 - stores only local repository paths in the saved-project list.
 
 ## Possible future improvements
