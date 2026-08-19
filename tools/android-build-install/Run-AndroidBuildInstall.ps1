@@ -23,10 +23,18 @@ New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 function Normalize-ProjectPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    return [System.IO.Path]::GetFullPath($Path).TrimEnd(
-        [System.IO.Path]::DirectorySeparatorChar,
-        [System.IO.Path]::AltDirectorySeparatorChar
-    )
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetPathRoot($fullPath)
+
+    if ($fullPath.Length -gt $root.Length) {
+        $trimChars = [char[]]@(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )
+        $fullPath = $fullPath.TrimEnd($trimChars)
+    }
+
+    return $fullPath
 }
 
 function Get-SavedProjects {
@@ -101,7 +109,7 @@ function Remember-Project {
     }
 
     $existing = @(Get-SavedProjects | Where-Object { $_ -ne $normalized })
-    Save-SavedProjects -Projects @($normalized) + $existing
+    Save-SavedProjects -Projects (@($normalized) + $existing)
 
     return $normalized
 }
