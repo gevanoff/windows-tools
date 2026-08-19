@@ -75,6 +75,18 @@ adb -s <device-serial> install -r <apk>
 
 The tool does **not** automatically uninstall an existing app when signatures differ. Android reports this as `INSTALL_FAILED_UPDATE_INCOMPATIBLE`; uninstalling would normally remove the app's local data, so that action is left explicit.
 
+## Failure logs
+
+Runs started through `Build-And-Install-Android.bat` are captured to timestamped text logs under:
+
+```text
+%LOCALAPPDATA%\WindowsTools\android-build-install\logs
+```
+
+The launcher still shows build output in the console while also writing it to the log. The log includes the selected project argument, tool output, Gradle output, adb output, and final exit code.
+
+If a run fails, the latest log opens automatically in Notepad. This makes the actual Gradle or adb error easy to copy and share even when the console window is difficult to select or closes unexpectedly.
+
 ## Finding adb
 
 The tool does not require `adb` to be on `PATH`. It checks, in order:
@@ -112,13 +124,15 @@ If a project's Gradle version rejects the selected Java runtime, use the JDK req
 
 ## Command-line use
 
-Run with the standard debug build:
+Run the implementation directly with the standard debug build:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -File .\Build-And-Install-Android.ps1 `
     -Project "C:\src\chatturanga"
 ```
+
+Direct implementation calls do not use the launcher-level persistent log wrapper. For troubleshooting, use `Build-And-Install-Android.bat` or `Run-AndroidBuildInstall.ps1`.
 
 Specify a different Gradle assemble task:
 
@@ -144,7 +158,8 @@ Target a particular attached device:
 - stops before building when no usable Android device is connected;
 - never uninstalls an existing Android application automatically;
 - uses `adb install -r` so successful updates normally retain app data;
-- returns a nonzero exit code when building or installation fails.
+- returns a nonzero exit code when building or installation fails;
+- preserves console/build diagnostics to a timestamped log when launched normally.
 
 ## Possible future improvements
 
