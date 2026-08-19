@@ -1,6 +1,5 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [string]$Source
 )
 
@@ -24,6 +23,34 @@ function Show-Error {
     ) | Out-Null
 }
 
+function Select-Folder {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Description
+    )
+
+    $picker = New-Object System.Windows.Forms.FolderBrowserDialog
+    $picker.Description = $Description
+    $picker.ShowNewFolderButton = $true
+
+    $result = $picker.ShowDialog()
+
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+        return $null
+    }
+
+    return $picker.SelectedPath
+}
+
+if ([string]::IsNullOrWhiteSpace($Source)) {
+    $Source = Select-Folder -Description 'Choose the folder containing the Google Drive ZIP files'
+
+    if ([string]::IsNullOrWhiteSpace($Source)) {
+        Write-Host 'Cancelled.'
+        exit 0
+    }
+}
+
 try {
     $Source = [System.IO.Path]::GetFullPath($Source)
 }
@@ -33,7 +60,7 @@ catch {
 }
 
 if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
-    Show-Error "The dropped item is not a folder:`n$Source"
+    Show-Error "The source is not a folder:`n$Source"
     exit 1
 }
 
@@ -47,18 +74,14 @@ if ($zipFiles.Count -eq 0) {
     exit 1
 }
 
-$picker = New-Object System.Windows.Forms.FolderBrowserDialog
-$picker.Description = 'Choose where the Google Drive files should be extracted'
-$picker.ShowNewFolderButton = $true
+$Destination = Select-Folder -Description 'Choose where the Google Drive files should be extracted'
 
-$result = $picker.ShowDialog()
-
-if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+if ([string]::IsNullOrWhiteSpace($Destination)) {
     Write-Host 'Cancelled.'
     exit 0
 }
 
-$Destination = [System.IO.Path]::GetFullPath($picker.SelectedPath)
+$Destination = [System.IO.Path]::GetFullPath($Destination)
 $destinationPrefix = $Destination.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
 
 Write-Host ''
