@@ -1,6 +1,6 @@
 # Google Drive ZIP Merger
 
-Google Drive splits large folder downloads into multiple ZIP archives. This utility lets you drag the folder containing those ZIP files onto a launcher, choose the final destination, and extract all archives directly into one merged directory tree.
+Google Drive splits large folder downloads into multiple ZIP archives. This utility lets you select the folder containing those ZIP files, choose the final destination, and extract all archives directly into one merged directory tree.
 
 ## Requirements
 
@@ -10,12 +10,25 @@ Google Drive splits large folder downloads into multiple ZIP archives. This util
 
 ## Use
 
-1. Download the large folder from Google Drive.
-2. Keep the resulting `.zip` files together in one folder.
-3. Drag that folder onto `Merge-GoogleDriveZips.bat`.
-4. Choose the final destination folder in the Windows folder picker.
-5. Wait for all ZIP files to be processed.
-6. After successful extraction, choose whether to delete the original ZIP files.
+You can start the tool either way:
+
+### Double-click
+
+1. Double-click `Merge-GoogleDriveZips.bat`.
+2. Choose the folder containing the Google Drive `.zip` files.
+3. Choose the final destination folder.
+4. Wait for all ZIP files to be processed.
+5. After successful extraction, choose whether to delete the original ZIP files.
+
+### Drag and drop
+
+1. Keep the resulting Google Drive `.zip` files together in one folder.
+2. Drag that folder onto `Merge-GoogleDriveZips.bat` in File Explorer.
+3. Choose the final destination folder.
+4. Wait for all ZIP files to be processed.
+5. After successful extraction, choose whether to delete the original ZIP files.
+
+Dragging a folder into an already-open console window is not supported; drag the folder onto the `.bat` file itself.
 
 When complete, the destination opens automatically in File Explorer.
 
@@ -23,7 +36,8 @@ When complete, the destination opens automatically in File Explorer.
 
 The tool:
 
-- finds `.zip` files directly inside the dropped source folder;
+- accepts a source folder supplied by drag-and-drop or opens a source-folder picker when launched normally;
+- finds `.zip` files directly inside the source folder;
 - processes them in filename order;
 - extracts every archive directly into the selected destination;
 - preserves directory paths stored in the ZIPs;
@@ -41,12 +55,12 @@ This behavior is suitable for normal partitioned Google Drive downloads, but sho
 
 ## Files
 
-- `Merge-GoogleDriveZips.bat` — drag-and-drop Windows launcher.
-- `Merge-GoogleDriveZips.ps1` — extraction, validation, prompting, and cleanup logic.
+- `Merge-GoogleDriveZips.bat` — double-click and drag-and-drop Windows launcher.
+- `Merge-GoogleDriveZips.ps1` — source selection, extraction, validation, prompting, and cleanup logic.
 
 ## Command-line use
 
-The PowerShell implementation can also be called directly:
+The PowerShell implementation can also be called directly with an explicit source folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
@@ -54,7 +68,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -Source "C:\Users\Example\Downloads\DriveDownload"
 ```
 
-The destination is still chosen through the graphical folder picker.
+If `-Source` is omitted, the graphical source-folder picker appears. The destination is always chosen through the graphical folder picker.
 
 ## Possible future improvements
 
