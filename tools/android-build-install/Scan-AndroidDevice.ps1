@@ -111,6 +111,9 @@ function Resolve-ApkInspector {
         $buildTools = Join-Path $root 'build-tools'
         if (-not (Test-Path -LiteralPath $buildTools -PathType Container)) { continue }
 
+        # AAPT2 is present in modern Build-Tools. Version directory names are
+        # two-digit+ Android SDK versions in supported AAPT2 releases, so name
+        # sorting selects the newest installed tool in normal Android SDKs.
         $directories = @(Get-ChildItem -LiteralPath $buildTools -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
         foreach ($directory in $directories) {
             $aapt2 = Join-Path $directory.FullName 'aapt2.exe'
@@ -290,7 +293,8 @@ $adb = Resolve-Adb -GradleRoot $firstGradleRoot
 if (-not $adb) { throw 'adb.exe could not be found.' }
 $serial = Resolve-DeviceSerial -Adb $adb -RequestedSerial $DeviceSerial
 
-$tempRoot = Join-Path $env:TEMP 'WindowsTools\android-build-install\scan'
+$tempBase = if ($env:TEMP) { $env:TEMP } else { $stateRoot }
+$tempRoot = Join-Path $tempBase 'WindowsTools\android-build-install\scan'
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
 foreach ($projectPath in $validProjects) {
@@ -326,6 +330,11 @@ foreach ($projectPath in $validProjects) {
 
     $localHash = (Get-FileHash -LiteralPath $local.Apk.FullName -Algorithm SHA256).Hash
     $paths = Invoke-NativeCaptured -FilePath $adb -Arguments @('-s', $serial, 'shell', 'pm', 'path', $packageId)
+    if ($paths.ExitCode -ne 0) {
+        New-ScanResult -ProjectPath $projectPath -Status 'Unknown' -PackageId $packageId -LocalApk $local.Apk.FullName -LocalHash $localHash -Detail "adb failed while querying the installed package: $($paths.Output -join ' ')" -Device $serial
+        continue
+    }
+
     $installedPaths = @($paths.Output | ForEach-Object {
         if ($_ -match '^package:(.+)$') { $matches[1].Trim() }
     } | Where-Object { $_ })
