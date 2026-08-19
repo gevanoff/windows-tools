@@ -8,6 +8,7 @@ The repository is organized as a collection rather than around a single applicat
 
 | Tool | Purpose |
 | --- | --- |
+| `android-build-install` | Build an Android project with its Gradle wrapper and install the resulting debug APK on a connected Android device. |
 | `google-drive-zip-merger` | Merge the multiple ZIP archives produced by large Google Drive folder downloads into one destination tree. |
 
 ## Repository conventions
