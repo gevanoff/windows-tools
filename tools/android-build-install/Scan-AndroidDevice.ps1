@@ -1,0 +1,370 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)][string[]]$Project,
+    [string]$DeviceSerial
+)
+
+$ErrorActionPreference = 'Stop'
+
+function Invoke-NativeCaptured {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $FilePath @Arguments 2>&1
+        $exitCode = [int]$LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = @($output | ForEach-Object { "$_" })
+    }
+}
+
+function Get-GradleRoots {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [int]$MaxDepth = 2
+    )
+
+    $skipNames = @('.git', '.gradle', '.idea', 'build', 'node_modules', 'out')
+    $queue = New-Object System.Collections.Queue
+    $queue.Enqueue([pscustomobject]@{ Path = $Root; Depth = 0 })
+    $results = @()
+
+    while ($queue.Count -gt 0) {
+        $node = $queue.Dequeue()
+        if (Test-Path -LiteralPath (Join-Path $node.Path 'gradlew.bat') -PathType Leaf) {
+            $results += [System.IO.Path]::GetFullPath($node.Path)
+            continue
+        }
+
+        if ($node.Depth -ge $MaxDepth) { continue }
+
+        foreach ($child in Get-ChildItem -LiteralPath $node.Path -Directory -ErrorAction SilentlyContinue) {
+            if ($skipNames -contains $child.Name) { continue }
+            $queue.Enqueue([pscustomobject]@{
+                Path = $child.FullName
+                Depth = $node.Depth + 1
+            })
+        }
+    }
+
+    return @($results | Select-Object -Unique)
+}
+
+function Get-LocalSdkPath {
+    param([Parameter(Mandatory = $true)][string]$GradleRoot)
+
+    $localProperties = Join-Path $GradleRoot 'local.properties'
+    if (-not (Test-Path -LiteralPath $localProperties -PathType Leaf)) { return $null }
+
+    foreach ($line in Get-Content -LiteralPath $localProperties) {
+        if ($line -match '^\s*sdk\.dir\s*=\s*(.+)\s*$') {
+            $value = $matches[1].Trim().Replace('\:', ':').Replace('\\', '\')
+            return [Environment]::ExpandEnvironmentVariables($value)
+        }
+    }
+
+    return $null
+}
+
+function Get-SdkRoots {
+    param([string]$GradleRoot)
+
+    $roots = @()
+    if ($GradleRoot) {
+        $local = Get-LocalSdkPath -GradleRoot $GradleRoot
+        if ($local) { $roots += $local }
+    }
+    if ($env:ANDROID_SDK_ROOT) { $roots += $env:ANDROID_SDK_ROOT }
+    if ($env:ANDROID_HOME) { $roots += $env:ANDROID_HOME }
+    if ($env:LOCALAPPDATA) { $roots += (Join-Path $env:LOCALAPPDATA 'Android\Sdk') }
+
+    return @($roots | Where-Object { $_ } | Select-Object -Unique)
+}
+
+function Resolve-Adb {
+    param([string]$GradleRoot)
+
+    foreach ($root in @(Get-SdkRoots -GradleRoot $GradleRoot)) {
+        $candidate = Join-Path $root 'platform-tools\adb.exe'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+
+    $command = Get-Command adb.exe -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    return $null
+}
+
+function Resolve-ApkInspector {
+    param([string]$GradleRoot)
+
+    foreach ($root in @(Get-SdkRoots -GradleRoot $GradleRoot)) {
+        $buildTools = Join-Path $root 'build-tools'
+        if (-not (Test-Path -LiteralPath $buildTools -PathType Container)) { continue }
+
+        # AAPT2 is present in modern Build-Tools. Version directory names are
+        # two-digit+ Android SDK versions in supported AAPT2 releases, so name
+        # sorting selects the newest installed tool in normal Android SDKs.
+        $directories = @(Get-ChildItem -LiteralPath $buildTools -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+        foreach ($directory in $directories) {
+            $aapt2 = Join-Path $directory.FullName 'aapt2.exe'
+            if (Test-Path -LiteralPath $aapt2 -PathType Leaf) {
+                return [pscustomobject]@{ Path = $aapt2; Kind = 'aapt2' }
+            }
+
+            $aapt = Join-Path $directory.FullName 'aapt.exe'
+            if (Test-Path -LiteralPath $aapt -PathType Leaf) {
+                return [pscustomobject]@{ Path = $aapt; Kind = 'aapt' }
+            }
+        }
+    }
+
+    return $null
+}
+
+function Resolve-DeviceSerial {
+    param(
+        [Parameter(Mandatory = $true)][string]$Adb,
+        [string]$RequestedSerial
+    )
+
+    $devices = Invoke-NativeCaptured -FilePath $Adb -Arguments @('devices', '-l')
+    if ($devices.ExitCode -ne 0) {
+        throw "adb failed while listing devices: $($devices.Output -join ' ')"
+    }
+
+    $ready = @()
+    foreach ($line in $devices.Output) {
+        if ($line -match '^(\S+)\s+device\b') {
+            $ready += $matches[1]
+        }
+    }
+
+    if ($RequestedSerial) {
+        if ($ready -notcontains $RequestedSerial) {
+            throw "Device '$RequestedSerial' is not connected and authorized."
+        }
+        return $RequestedSerial
+    }
+
+    if ($ready.Count -eq 0) {
+        throw 'No authorized Android device was found.'
+    }
+    if ($ready.Count -gt 1) {
+        throw 'Multiple authorized Android devices are connected. Disconnect extras before scanning, or run the scanner with -DeviceSerial.'
+    }
+
+    return $ready[0]
+}
+
+function Get-ApkCandidates {
+    param(
+        [Parameter(Mandatory = $true)][string]$GradleRoot,
+        [int]$MaxModuleDepth = 2
+    )
+
+    $skipNames = @('.git', '.gradle', '.idea', 'build', 'node_modules', 'out')
+    $queue = New-Object System.Collections.Queue
+    $queue.Enqueue([pscustomobject]@{ Path = $GradleRoot; Depth = 0 })
+    $apks = @()
+
+    while ($queue.Count -gt 0) {
+        $node = $queue.Dequeue()
+        $apkRoot = Join-Path $node.Path 'build\outputs\apk'
+        if (Test-Path -LiteralPath $apkRoot -PathType Container) {
+            $apks += Get-ChildItem -LiteralPath $apkRoot -Filter '*.apk' -File -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch '\\androidTest\\' }
+        }
+
+        if ($node.Depth -ge $MaxModuleDepth) { continue }
+        foreach ($child in Get-ChildItem -LiteralPath $node.Path -Directory -ErrorAction SilentlyContinue) {
+            if ($skipNames -contains $child.Name) { continue }
+            $queue.Enqueue([pscustomobject]@{
+                Path = $child.FullName
+                Depth = $node.Depth + 1
+            })
+        }
+    }
+
+    $unique = @($apks | Sort-Object FullName -Unique)
+    $debug = @($unique | Where-Object {
+        $_.FullName -match '(?i)\\debug\\' -or $_.Name -match '(?i)debug.*\.apk$'
+    })
+
+    if ($debug.Count -gt 0) { return @($debug | Sort-Object LastWriteTime -Descending) }
+    return @($unique | Sort-Object LastWriteTime -Descending)
+}
+
+function Resolve-LocalApk {
+    param([Parameter(Mandatory = $true)][string]$GradleRoot)
+
+    $candidates = @(Get-ApkCandidates -GradleRoot $GradleRoot)
+    if ($candidates.Count -eq 0) {
+        return [pscustomobject]@{ Apk = $null; Detail = 'No local APK has been built.' }
+    }
+    if ($candidates.Count -eq 1) {
+        return [pscustomobject]@{ Apk = $candidates[0]; Detail = '' }
+    }
+
+    $conventional = @($candidates | Where-Object {
+        $_.FullName -match '(?i)\\app\\build\\outputs\\apk\\debug\\app-debug\.apk$'
+    })
+    if ($conventional.Count -eq 1) {
+        return [pscustomobject]@{ Apk = $conventional[0]; Detail = 'Using conventional app-debug.apk.' }
+    }
+
+    return [pscustomobject]@{
+        Apk = $null
+        Detail = "Multiple local APKs are present ($($candidates.Count)); exact target is ambiguous."
+    }
+}
+
+function Get-PackageId {
+    param(
+        [Parameter(Mandatory = $true)][System.IO.FileInfo]$Apk,
+        [Parameter(Mandatory = $true)]$Inspector
+    )
+
+    if ($Inspector.Kind -eq 'aapt2') {
+        $result = Invoke-NativeCaptured -FilePath $Inspector.Path -Arguments @('dump', 'packagename', $Apk.FullName)
+        if ($result.ExitCode -eq 0) {
+            foreach ($line in $result.Output) {
+                $candidate = $line.Trim()
+                if ($candidate -match '^[A-Za-z][A-Za-z0-9_.]+$') { return $candidate }
+            }
+        }
+    }
+    else {
+        $result = Invoke-NativeCaptured -FilePath $Inspector.Path -Arguments @('dump', 'badging', $Apk.FullName)
+        if ($result.ExitCode -eq 0) {
+            foreach ($line in $result.Output) {
+                if ($line -match "^package:\s+name='([^']+)'") { return $matches[1] }
+            }
+        }
+    }
+
+    return $null
+}
+
+function New-ScanResult {
+    param(
+        [string]$ProjectPath,
+        [string]$Status,
+        [string]$PackageId = '',
+        [string]$LocalApk = '',
+        [string]$LocalHash = '',
+        [string]$InstalledHash = '',
+        [string]$Detail = '',
+        [string]$Device = ''
+    )
+
+    return [pscustomobject]@{
+        ProjectPath = $ProjectPath
+        Project = Split-Path -Leaf $ProjectPath
+        Status = $Status
+        PackageId = $PackageId
+        LocalApk = $LocalApk
+        LocalHash = $LocalHash
+        InstalledHash = $InstalledHash
+        Detail = $Detail
+        Device = $Device
+    }
+}
+
+$validProjects = @($Project | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) })
+if ($validProjects.Count -eq 0) { throw 'No valid saved project folders were supplied.' }
+
+$firstGradleRoot = $null
+foreach ($projectPath in $validProjects) {
+    $roots = @(Get-GradleRoots -Root $projectPath)
+    if ($roots.Count -gt 0) { $firstGradleRoot = $roots[0]; break }
+}
+
+$adb = Resolve-Adb -GradleRoot $firstGradleRoot
+if (-not $adb) { throw 'adb.exe could not be found.' }
+$serial = Resolve-DeviceSerial -Adb $adb -RequestedSerial $DeviceSerial
+
+$tempBase = if ($env:TEMP) { $env:TEMP } else { $stateRoot }
+$tempRoot = Join-Path $tempBase 'WindowsTools\android-build-install\scan'
+New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+
+foreach ($projectPath in $validProjects) {
+    $gradleRoots = @(Get-GradleRoots -Root $projectPath)
+    if ($gradleRoots.Count -eq 0) {
+        New-ScanResult -ProjectPath $projectPath -Status 'Unknown' -Detail 'No Gradle wrapper found.' -Device $serial
+        continue
+    }
+    if ($gradleRoots.Count -gt 1) {
+        New-ScanResult -ProjectPath $projectPath -Status 'Unknown' -Detail 'Multiple Gradle roots found; scan target is ambiguous.' -Device $serial
+        continue
+    }
+
+    $gradleRoot = $gradleRoots[0]
+    $local = Resolve-LocalApk -GradleRoot $gradleRoot
+    if ($null -eq $local.Apk) {
+        $status = if ($local.Detail -like 'No local APK*') { 'No local build' } else { 'Unknown' }
+        New-ScanResult -ProjectPath $projectPath -Status $status -Detail $local.Detail -Device $serial
+        continue
+    }
+
+    $inspector = Resolve-ApkInspector -GradleRoot $gradleRoot
+    if ($null -eq $inspector) {
+        New-ScanResult -ProjectPath $projectPath -Status 'Unknown' -LocalApk $local.Apk.FullName -Detail 'Android build-tools package inspector (aapt/aapt2) was not found.' -Device $serial
+        continue
+    }
+
+    $packageId = Get-PackageId -Apk $local.Apk -Inspector $inspector
+    if (-not $packageId) {
+        New-ScanResult -ProjectPath $projectPath -Status 'Unknown' -LocalApk $local.Apk.FullName -Detail 'Could not read the APK package ID.' -Device $serial
+        continue
+    }
+
+    $localHash = (Get-FileHash -LiteralPath $local.Apk.FullName -Algorithm SHA256).Hash
+    $paths = Invoke-NativeCaptured -FilePath $adb -Arguments @('-s', $serial, 'shell', 'pm', 'path', $packageId)
+    if ($paths.ExitCode -ne 0) {
+        New-ScanResult -ProjectPath $projectPath -Status 'Unknown' -PackageId $packageId -LocalApk $local.Apk.FullName -LocalHash $localHash -Detail "adb failed while querying the installed package: $($paths.Output -join ' ')" -Device $serial
+        continue
+    }
+
+    $installedPaths = @($paths.Output | ForEach-Object {
+        if ($_ -match '^package:(.+)$') { $matches[1].Trim() }
+    } | Where-Object { $_ })
+
+    if ($installedPaths.Count -eq 0) {
+        New-ScanResult -ProjectPath $projectPath -Status 'Not installed' -PackageId $packageId -LocalApk $local.Apk.FullName -LocalHash $localHash -Detail $local.Detail -Device $serial
+        continue
+    }
+
+    if ($installedPaths.Count -gt 1) {
+        New-ScanResult -ProjectPath $projectPath -Status 'Unknown' -PackageId $packageId -LocalApk $local.Apk.FullName -LocalHash $localHash -Detail "Installed package uses $($installedPaths.Count) split APKs; exact byte comparison is not supported." -Device $serial
+        continue
+    }
+
+    $tempApk = Join-Path $tempRoot ("{0}.apk" -f [Guid]::NewGuid().ToString('N'))
+    try {
+        $pull = Invoke-NativeCaptured -FilePath $adb -Arguments @('-s', $serial, 'pull', $installedPaths[0], $tempApk)
+        if ($pull.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $tempApk -PathType Leaf)) {
+            New-ScanResult -ProjectPath $projectPath -Status 'Unknown' -PackageId $packageId -LocalApk $local.Apk.FullName -LocalHash $localHash -Detail 'Installed APK is present but could not be pulled for hashing.' -Device $serial
+            continue
+        }
+
+        $installedHash = (Get-FileHash -LiteralPath $tempApk -Algorithm SHA256).Hash
+        $status = if ($installedHash -eq $localHash) { 'Same' } else { 'Different' }
+        $detail = "Local APK: $($local.Apk.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+        if ($local.Detail) { $detail = "$detail. $($local.Detail)" }
+
+        New-ScanResult -ProjectPath $projectPath -Status $status -PackageId $packageId -LocalApk $local.Apk.FullName -LocalHash $localHash -InstalledHash $installedHash -Detail $detail -Device $serial
+    }
+    finally {
+        Remove-Item -LiteralPath $tempApk -Force -ErrorAction SilentlyContinue
+    }
+}

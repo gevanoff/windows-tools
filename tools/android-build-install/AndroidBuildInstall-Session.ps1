@@ -13,6 +13,7 @@ $stateRoot = if ($env:LOCALAPPDATA) {
 $logRoot = Join-Path $stateRoot 'logs'
 $projectsPath = Join-Path $stateRoot 'projects.json'
 $runner = Join-Path $PSScriptRoot 'Run-AndroidBuildInstall.ps1'
+$scanner = Join-Path $PSScriptRoot 'Scan-AndroidDevice.ps1'
 
 New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
@@ -196,11 +197,141 @@ function Show-Reports {
     [void]$form.ShowDialog()
 }
 
+function Show-DeviceScan {
+    $projects = @(Get-SavedProjects)
+    if ($projects.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            'Add at least one Android project before scanning the device.',
+            'Android Device Scan',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $scanner -PathType Leaf)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Scanner script was not found:`n$scanner",
+            'Android Device Scan',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+        return
+    }
+
+    $oldCursor = [System.Windows.Forms.Cursor]::Current
+    try {
+        [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::WaitCursor
+        [System.Windows.Forms.Application]::DoEvents()
+        $results = @(& $scanner -Project $projects)
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            'Android Device Scan',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+        return
+    }
+    finally {
+        [System.Windows.Forms.Cursor]::Current = $oldCursor
+    }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Android Build and Install - Device Scan'
+    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+    $form.ClientSize = New-Object System.Drawing.Size(1120, 500)
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+
+    $device = if ($results.Count -gt 0) { $results[0].Device } else { '(unknown)' }
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = "Device: $device    Comparison: installed APK bytes vs latest local debug APK"
+    $label.AutoSize = $true
+    $label.Location = New-Object System.Drawing.Point(16, 16)
+    $form.Controls.Add($label)
+
+    $hint = New-Object System.Windows.Forms.Label
+    $hint.Text = 'Same/Different is SHA-256 exact. Unknown means an exact comparison was not safe or possible.'
+    $hint.AutoSize = $true
+    $hint.Location = New-Object System.Drawing.Point(16, 40)
+    $form.Controls.Add($hint)
+
+    $list = New-Object System.Windows.Forms.ListView
+    $list.Location = New-Object System.Drawing.Point(16, 70)
+    $list.Size = New-Object System.Drawing.Size(1088, 356)
+    $list.View = [System.Windows.Forms.View]::Details
+    $list.FullRowSelect = $true
+    $list.GridLines = $true
+    $list.MultiSelect = $false
+    [void]$list.Columns.Add('Status', 115)
+    [void]$list.Columns.Add('Project', 170)
+    [void]$list.Columns.Add('Package', 215)
+    [void]$list.Columns.Add('Local APK', 260)
+    [void]$list.Columns.Add('Detail', 320)
+    $form.Controls.Add($list)
+
+    foreach ($result in $results) {
+        $localApk = if ($result.LocalApk) { Split-Path -Leaf $result.LocalApk } else { '' }
+        $item = New-Object System.Windows.Forms.ListViewItem([string]$result.Status)
+        [void]$item.SubItems.Add([string]$result.Project)
+        [void]$item.SubItems.Add([string]$result.PackageId)
+        [void]$item.SubItems.Add($localApk)
+        [void]$item.SubItems.Add([string]$result.Detail)
+        $item.Tag = $result
+        [void]$list.Items.Add($item)
+    }
+
+    $details = New-Object System.Windows.Forms.Button
+    $details.Text = 'Details...'
+    $details.Size = New-Object System.Drawing.Size(110, 32)
+    $details.Location = New-Object System.Drawing.Point(16, 450)
+    $details.Enabled = $false
+    $form.Controls.Add($details)
+
+    $close = New-Object System.Windows.Forms.Button
+    $close.Text = 'Close'
+    $close.Size = New-Object System.Drawing.Size(100, 32)
+    $close.Location = New-Object System.Drawing.Point(1004, 450)
+    $close.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($close)
+    $form.CancelButton = $close
+
+    $list.Add_SelectedIndexChanged({ $details.Enabled = ($list.SelectedItems.Count -eq 1) })
+    $showDetails = {
+        if ($list.SelectedItems.Count -ne 1) { return }
+        $result = $list.SelectedItems[0].Tag
+        $text = @(
+            "Project: $($result.ProjectPath)",
+            "Status: $($result.Status)",
+            "Package: $($result.PackageId)",
+            "Local APK: $($result.LocalApk)",
+            "Local SHA-256: $($result.LocalHash)",
+            "Installed SHA-256: $($result.InstalledHash)",
+            "Detail: $($result.Detail)"
+        ) -join [Environment]::NewLine
+
+        [System.Windows.Forms.MessageBox]::Show(
+            $text,
+            'Android Device Scan Details',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+    }
+    $details.Add_Click($showDetails)
+    $list.Add_DoubleClick($showDetails)
+
+    if ($list.Items.Count -gt 0) { $list.Items[0].Selected = $true }
+    [void]$form.ShowDialog()
+}
+
 function Select-SavedProject {
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'Android Build and Install - Choose Project'
     $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-    $form.ClientSize = New-Object System.Drawing.Size(760, 390)
+    $form.ClientSize = New-Object System.Drawing.Size(900, 390)
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
@@ -212,14 +343,14 @@ function Select-SavedProject {
     $form.Controls.Add($title)
 
     $hint = New-Object System.Windows.Forms.Label
-    $hint.Text = 'Double-click a project, or select it and click Build. This screen returns after every run.'
+    $hint.Text = 'Double-click a project, or select it and click Build. Scan Device compares local APKs with installed copies.'
     $hint.AutoSize = $true
     $hint.Location = New-Object System.Drawing.Point(16, 42)
     $form.Controls.Add($hint)
 
     $list = New-Object System.Windows.Forms.ListBox
     $list.Location = New-Object System.Drawing.Point(16, 72)
-    $list.Size = New-Object System.Drawing.Size(728, 238)
+    $list.Size = New-Object System.Drawing.Size(868, 238)
     $list.HorizontalScrollbar = $true
     $form.Controls.Add($list)
 
@@ -244,17 +375,24 @@ function Select-SavedProject {
     $reports.Location = New-Object System.Drawing.Point(232, 334)
     $form.Controls.Add($reports)
 
+    $scan = New-Object System.Windows.Forms.Button
+    $scan.Text = 'Scan Device...'
+    $scan.Size = New-Object System.Drawing.Size(120, 32)
+    $scan.Location = New-Object System.Drawing.Point(340, 334)
+    $scan.Enabled = ($list.Items.Count -gt 0)
+    $form.Controls.Add($scan)
+
     $build = New-Object System.Windows.Forms.Button
     $build.Text = 'Build'
     $build.Size = New-Object System.Drawing.Size(100, 32)
-    $build.Location = New-Object System.Drawing.Point(424, 334)
+    $build.Location = New-Object System.Drawing.Point(576, 334)
     $build.Enabled = ($list.Items.Count -gt 0)
     $form.Controls.Add($build)
 
     $exit = New-Object System.Windows.Forms.Button
     $exit.Text = 'Exit'
     $exit.Size = New-Object System.Drawing.Size(100, 32)
-    $exit.Location = New-Object System.Drawing.Point(644, 334)
+    $exit.Location = New-Object System.Drawing.Point(784, 334)
     $exit.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($exit)
 
@@ -282,6 +420,7 @@ function Select-SavedProject {
         $list.Items.Clear()
         foreach ($saved in @(Get-SavedProjects)) { [void]$list.Items.Add($saved) }
         $list.SelectedItem = $path
+        $scan.Enabled = ($list.Items.Count -gt 0)
     })
 
     $remove.Add_Click({
@@ -293,12 +432,14 @@ function Select-SavedProject {
         }
         Save-SavedProjects -Projects $remaining
         $list.Items.RemoveAt($index)
+        $scan.Enabled = ($list.Items.Count -gt 0)
         if ($list.Items.Count -gt 0) {
             $list.SelectedIndex = [Math]::Min($index, $list.Items.Count - 1)
         }
     })
 
     $reports.Add_Click({ Show-Reports })
+    $scan.Add_Click({ Show-DeviceScan })
     $form.Add_Shown({
         if ($list.Items.Count -gt 0) {
             $list.SelectedIndex = 0

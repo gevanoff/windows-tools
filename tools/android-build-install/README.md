@@ -11,6 +11,7 @@ The tool is intended for quick physical-device testing of local Android projects
 - an Android project containing `gradlew.bat`
 - a JDK compatible with that project's Gradle/Android Gradle Plugin versions
 - Android SDK Platform-Tools (`adb.exe`)
+- Android SDK Build-Tools (`aapt2.exe`) for device APK scanning
 - an Android device with USB debugging enabled
 - the appropriate Windows USB driver for the device, when one is required
 
@@ -28,7 +29,7 @@ The project itself remains responsible for its normal Gradle dependencies and An
 6. The tool builds the debug APK and installs it on the connected device.
 7. After the run finishes, the project chooser returns so another project can be built without restarting the launcher.
 
-Use **Add...** to browse for another repository and remember it. Use **Remove** to delete a path from the remembered list without changing the repository itself. Use **Reports...** to inspect previous build/install runs.
+Use **Add...** to browse for another repository and remember it. Use **Remove** to delete a path from the remembered list without changing the repository itself. Use **Reports...** to inspect previous build/install runs. Use **Scan Device...** to compare saved projects' existing local debug APKs with the copies installed on the attached Android device.
 
 ### Drag and drop
 
@@ -66,6 +67,32 @@ The launcher remembers repository paths in:
 Saved paths are per Windows user and remain outside the Git repository, so pulling or changing `windows-tools` does not overwrite the list.
 
 The most recently selected or dragged project is moved to the top of the list. Paths that no longer exist are omitted from the chooser; they can be added again after the repository is moved or restored.
+
+## Device APK scan
+
+Click **Scan Device...** from the project chooser to compare each saved project's latest existing local debug APK against the installed application on the connected device.
+
+The scan does **not** rebuild projects and does not modify the device. For each saved project it:
+
+1. locates the Gradle project and its existing debug APK output;
+2. prefers a unique conventional `app\build\outputs\apk\debug\app-debug.apk` when several APKs exist;
+3. uses Android Build-Tools (`aapt2`, with `aapt` fallback) to read the APK package ID;
+4. asks the device for that package's installed APK path;
+5. when there is one pullable installed APK, temporarily pulls it to the Windows temp directory;
+6. compares local and installed APKs using SHA-256;
+7. deletes the temporary pulled APK after hashing.
+
+The results window reports:
+
+- **Same** — the installed APK and local APK have identical SHA-256 hashes;
+- **Different** — the same package is installed, but its APK bytes differ from the local APK;
+- **Not installed** — the local APK's package is not installed on the device;
+- **No local build** — there is no existing APK to compare;
+- **Unknown** — an exact comparison is ambiguous or unavailable, such as multiple local APK targets, multiple Gradle roots, a split-APK installation, missing Build-Tools, or an installed APK that cannot be pulled.
+
+**Same** and **Different** mean exact comparison with the APK currently on disk; they do not imply that the local APK was rebuilt from the latest source changes immediately before the scan.
+
+If multiple authorized Android devices are connected, the current scan asks you to disconnect the extras or call `Scan-AndroidDevice.ps1` with `-DeviceSerial`. Normal build/install device selection remains unchanged.
 
 ## Build and install behavior
 
@@ -121,7 +148,7 @@ This avoids the common Windows situation where Android Studio can use `adb` but 
 
 ## Device handling
 
-The tool runs `adb devices -l` before building.
+The build/install tool runs `adb devices -l` before building.
 
 - One authorized device: selected automatically.
 - Multiple authorized devices: asks which device to use.
@@ -152,7 +179,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -Project "C:\src\chatturanga"
 ```
 
-Direct implementation calls do not use the session chooser or launcher-level persistent reports. For the normal interactive workflow, use `Build-And-Install-Android.bat`.
+Run a device comparison directly:
+
+```powershell
+.\Scan-AndroidDevice.ps1 `
+    -Project "C:\src\chatturanga", "C:\src\prism-break"
+```
+
+Direct build implementation calls do not use the session chooser or launcher-level persistent reports. For the normal interactive workflow, use `Build-And-Install-Android.bat`.
 
 Specify a different Gradle assemble task:
 
@@ -179,12 +213,13 @@ Target a particular attached device:
 - never uninstalls an existing Android application automatically;
 - uses `adb install -r` so successful updates normally retain app data;
 - preserves console/build diagnostics to timestamped reports;
-- stores only local repository paths in the saved-project list.
+- stores only local repository paths in the saved-project list;
+- device scanning is read-only except for a temporary APK copy on the Windows host, which is removed after hashing.
 
 ## Possible future improvements
 
 - optionally launch the installed app after installation;
-- add a graphical device chooser instead of console selection when multiple devices exist;
+- add a graphical device chooser to the scanner when multiple devices are attached;
 - optionally run project tests before installation;
-- support saved per-project Gradle task/JDK preferences;
+- support saved per-project Gradle task/JDK/APK preferences;
 - support Android App Bundle workflows when needed.
