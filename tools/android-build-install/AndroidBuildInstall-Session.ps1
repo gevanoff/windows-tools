@@ -12,8 +12,11 @@ $stateRoot = if ($env:LOCALAPPDATA) {
 }
 $logRoot = Join-Path $stateRoot 'logs'
 $projectsPath = Join-Path $stateRoot 'projects.json'
+$preferencesPath = Join-Path $stateRoot 'project-preferences.json'
 $runner = Join-Path $PSScriptRoot 'Run-AndroidBuildInstall.ps1'
 $scanner = Join-Path $PSScriptRoot 'Scan-AndroidDevice.ps1'
+$settingsEditor = Join-Path $PSScriptRoot 'Edit-AndroidProjectPreferences.ps1'
+$gitUpdater = Join-Path $PSScriptRoot 'Update-AndroidRepo.ps1'
 
 New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
@@ -33,16 +36,8 @@ function Normalize-ProjectPath {
 }
 
 function Get-SavedProjects {
-    if (-not (Test-Path -LiteralPath $projectsPath -PathType Leaf)) {
-        return @()
-    }
-
-    try {
-        $config = Get-Content -LiteralPath $projectsPath -Raw | ConvertFrom-Json
-    }
-    catch {
-        return @()
-    }
+    if (-not (Test-Path -LiteralPath $projectsPath -PathType Leaf)) { return @() }
+    try { $config = Get-Content -LiteralPath $projectsPath -Raw | ConvertFrom-Json } catch { return @() }
 
     $result = @()
     foreach ($item in @($config.projects)) {
@@ -74,10 +69,7 @@ function Remember-Project {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $path = Normalize-ProjectPath -Path $Path
-    if (-not (Test-Path -LiteralPath $path -PathType Container)) {
-        return $path
-    }
-
+    if (-not (Test-Path -LiteralPath $path -PathType Container)) { return $path }
     $others = @(Get-SavedProjects | Where-Object { $_ -ne $path })
     Save-SavedProjects -Projects (@($path) + $others)
     return $path
@@ -89,6 +81,35 @@ function Browse-ForProject {
     $picker.ShowNewFolderButton = $false
     if ($picker.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
     return $picker.SelectedPath
+}
+
+function Get-ProjectPreference {
+    param([Parameter(Mandatory = $true)][string]$ProjectPath)
+
+    $default = [pscustomobject]@{
+        gradleTask = 'assembleDebug'
+        preferredApk = ''
+        javaHome = ''
+        autoLaunch = $false
+    }
+
+    if (-not (Test-Path -LiteralPath $preferencesPath -PathType Leaf)) { return $default }
+    try { $json = Get-Content -LiteralPath $preferencesPath -Raw | ConvertFrom-Json } catch { return $default }
+
+    $normalized = Normalize-ProjectPath -Path $ProjectPath
+    foreach ($item in @($json.projects)) {
+        if ($null -eq $item -or [string]::IsNullOrWhiteSpace("$($item.path)")) { continue }
+        try { $candidate = Normalize-ProjectPath -Path "$($item.path)" } catch { continue }
+        if ($candidate -ieq $normalized) {
+            return [pscustomobject]@{
+                gradleTask = if ([string]::IsNullOrWhiteSpace("$($item.gradleTask)")) { 'assembleDebug' } else { "$($item.gradleTask)" }
+                preferredApk = "$($item.preferredApk)"
+                javaHome = "$($item.javaHome)"
+                autoLaunch = [bool]$item.autoLaunch
+            }
+        }
+    }
+    return $default
 }
 
 function Get-LogSummary {
@@ -110,13 +131,10 @@ function Get-LogSummary {
     }
     catch { }
 
-    $status = if ($null -eq $exitCode) { 'Incomplete' } elseif ($exitCode -eq 0) { 'Success' } else { 'Failed' }
-    $projectName = if ($projectPath) { Split-Path -Leaf $projectPath } else { '(unknown)' }
-
     return [pscustomobject]@{
         Time = $File.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-        Status = $status
-        Project = $projectName
+        Status = if ($null -eq $exitCode) { 'Incomplete' } elseif ($exitCode -eq 0) { 'Success' } else { 'Failed' }
+        Project = if ($projectPath) { Split-Path -Leaf $projectPath } else { '(unknown)' }
         Path = $File.FullName
     }
 }
@@ -149,8 +167,7 @@ function Show-Reports {
     [void]$list.Columns.Add('Report file', 350)
     $form.Controls.Add($list)
 
-    $files = @(Get-ChildItem -LiteralPath $logRoot -Filter 'android-build-install-*.log' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
-    foreach ($file in $files) {
+    foreach ($file in @(Get-ChildItem -LiteralPath $logRoot -Filter 'android-build-install-*.log' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)) {
         $summary = Get-LogSummary -File $file
         $item = New-Object System.Windows.Forms.ListViewItem($summary.Time)
         [void]$item.SubItems.Add($summary.Status)
@@ -200,22 +217,11 @@ function Show-Reports {
 function Show-DeviceScan {
     $projects = @(Get-SavedProjects)
     if ($projects.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show(
-            'Add at least one Android project before scanning the device.',
-            'Android Device Scan',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        ) | Out-Null
+        [System.Windows.Forms.MessageBox]::Show('Add at least one Android project before scanning the device.', 'Android Device Scan') | Out-Null
         return
     }
-
     if (-not (Test-Path -LiteralPath $scanner -PathType Leaf)) {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Scanner script was not found:`n$scanner",
-            'Android Device Scan',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        ) | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Scanner script was not found:`n$scanner", 'Android Device Scan') | Out-Null
         return
     }
 
@@ -226,12 +232,7 @@ function Show-DeviceScan {
         $results = @(& $scanner -Project $projects)
     }
     catch {
-        [System.Windows.Forms.MessageBox]::Show(
-            $_.Exception.Message,
-            'Android Device Scan',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        ) | Out-Null
+        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Android Device Scan') | Out-Null
         return
     }
     finally {
@@ -312,13 +313,7 @@ function Show-DeviceScan {
             "Installed SHA-256: $($result.InstalledHash)",
             "Detail: $($result.Detail)"
         ) -join [Environment]::NewLine
-
-        [System.Windows.Forms.MessageBox]::Show(
-            $text,
-            'Android Device Scan Details',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        ) | Out-Null
+        [System.Windows.Forms.MessageBox]::Show($text, 'Android Device Scan Details') | Out-Null
     }
     $details.Add_Click($showDetails)
     $list.Add_DoubleClick($showDetails)
@@ -327,82 +322,138 @@ function Show-DeviceScan {
     [void]$form.ShowDialog()
 }
 
+function Invoke-ProjectSettings {
+    param([Parameter(Mandatory = $true)][string]$ProjectPath)
+
+    if (-not (Test-Path -LiteralPath $settingsEditor -PathType Leaf)) {
+        [System.Windows.Forms.MessageBox]::Show("Settings editor was not found:`n$settingsEditor", 'Android Project Settings') | Out-Null
+        return
+    }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $settingsEditor -Project $ProjectPath -PreferencesPath $preferencesPath
+}
+
+function Invoke-ProjectGitPull {
+    param([Parameter(Mandatory = $true)][string]$ProjectPath)
+
+    if (-not (Test-Path -LiteralPath $gitUpdater -PathType Leaf)) {
+        [System.Windows.Forms.MessageBox]::Show("Git update helper was not found:`n$gitUpdater", 'Android Project Git Pull') | Out-Null
+        return
+    }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gitUpdater -Project $ProjectPath
+}
+
 function Select-SavedProject {
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'Android Build and Install - Choose Project'
     $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-    $form.ClientSize = New-Object System.Drawing.Size(900, 390)
+    $form.ClientSize = New-Object System.Drawing.Size(1120, 430)
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
 
     $title = New-Object System.Windows.Forms.Label
-    $title.Text = 'Choose a saved Android project to build and install:'
+    $title.Text = 'Choose a saved Android project:'
     $title.AutoSize = $true
     $title.Location = New-Object System.Drawing.Point(16, 16)
     $form.Controls.Add($title)
 
     $hint = New-Object System.Windows.Forms.Label
-    $hint.Text = 'Double-click a project, or select it and click Build. Scan Device compares local APKs with installed copies.'
+    $hint.Text = 'Build/install, update from Git, configure project defaults, scan the attached device, or inspect reports.'
     $hint.AutoSize = $true
     $hint.Location = New-Object System.Drawing.Point(16, 42)
     $form.Controls.Add($hint)
 
     $list = New-Object System.Windows.Forms.ListBox
     $list.Location = New-Object System.Drawing.Point(16, 72)
-    $list.Size = New-Object System.Drawing.Size(868, 238)
+    $list.Size = New-Object System.Drawing.Size(1088, 220)
     $list.HorizontalScrollbar = $true
     $form.Controls.Add($list)
-
     foreach ($saved in @(Get-SavedProjects)) { [void]$list.Items.Add($saved) }
+
+    $summary = New-Object System.Windows.Forms.Label
+    $summary.Text = 'Select a project to see its build settings.'
+    $summary.AutoSize = $true
+    $summary.Location = New-Object System.Drawing.Point(16, 305)
+    $form.Controls.Add($summary)
 
     $add = New-Object System.Windows.Forms.Button
     $add.Text = 'Add...'
     $add.Size = New-Object System.Drawing.Size(100, 32)
-    $add.Location = New-Object System.Drawing.Point(16, 334)
+    $add.Location = New-Object System.Drawing.Point(16, 362)
     $form.Controls.Add($add)
 
     $remove = New-Object System.Windows.Forms.Button
     $remove.Text = 'Remove'
     $remove.Size = New-Object System.Drawing.Size(100, 32)
-    $remove.Location = New-Object System.Drawing.Point(124, 334)
+    $remove.Location = New-Object System.Drawing.Point(124, 362)
     $remove.Enabled = $false
     $form.Controls.Add($remove)
 
     $reports = New-Object System.Windows.Forms.Button
     $reports.Text = 'Reports...'
     $reports.Size = New-Object System.Drawing.Size(100, 32)
-    $reports.Location = New-Object System.Drawing.Point(232, 334)
+    $reports.Location = New-Object System.Drawing.Point(232, 362)
     $form.Controls.Add($reports)
 
     $scan = New-Object System.Windows.Forms.Button
     $scan.Text = 'Scan Device...'
     $scan.Size = New-Object System.Drawing.Size(120, 32)
-    $scan.Location = New-Object System.Drawing.Point(340, 334)
+    $scan.Location = New-Object System.Drawing.Point(340, 362)
     $scan.Enabled = ($list.Items.Count -gt 0)
     $form.Controls.Add($scan)
+
+    $gitPull = New-Object System.Windows.Forms.Button
+    $gitPull.Text = 'Git Pull'
+    $gitPull.Size = New-Object System.Drawing.Size(100, 32)
+    $gitPull.Location = New-Object System.Drawing.Point(468, 362)
+    $gitPull.Enabled = $false
+    $form.Controls.Add($gitPull)
+
+    $settings = New-Object System.Windows.Forms.Button
+    $settings.Text = 'Settings...'
+    $settings.Size = New-Object System.Drawing.Size(100, 32)
+    $settings.Location = New-Object System.Drawing.Point(576, 362)
+    $settings.Enabled = $false
+    $form.Controls.Add($settings)
 
     $build = New-Object System.Windows.Forms.Button
     $build.Text = 'Build'
     $build.Size = New-Object System.Drawing.Size(100, 32)
-    $build.Location = New-Object System.Drawing.Point(576, 334)
-    $build.Enabled = ($list.Items.Count -gt 0)
+    $build.Location = New-Object System.Drawing.Point(792, 362)
+    $build.Enabled = $false
     $form.Controls.Add($build)
 
     $exit = New-Object System.Windows.Forms.Button
     $exit.Text = 'Exit'
     $exit.Size = New-Object System.Drawing.Size(100, 32)
-    $exit.Location = New-Object System.Drawing.Point(784, 334)
+    $exit.Location = New-Object System.Drawing.Point(1004, 362)
     $exit.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($exit)
 
     $form.AcceptButton = $build
     $form.CancelButton = $exit
 
+    $refreshSummary = {
+        if ($list.SelectedIndex -lt 0) {
+            $summary.Text = 'Select a project to see its build settings.'
+            return
+        }
+        $path = [string]$list.SelectedItem
+        $pref = Get-ProjectPreference -ProjectPath $path
+        $apkText = if ($pref.preferredApk) { $pref.preferredApk } else { '(prompt/default)' }
+        $javaText = if ($pref.javaHome) { $pref.javaHome } else { '(environment default)' }
+        $summary.Text = "Task: $($pref.gradleTask)    APK: $apkText    JDK: $javaText    Auto-launch: $([bool]$pref.autoLaunch)"
+    }
+
     $list.Add_SelectedIndexChanged({
         $selected = ($list.SelectedIndex -ge 0)
         $build.Enabled = $selected
         $remove.Enabled = $selected
+        $gitPull.Enabled = $selected
+        $settings.Enabled = $selected
+        & $refreshSummary
     })
 
     $build.Add_Click({
@@ -415,7 +466,7 @@ function Select-SavedProject {
 
     $add.Add_Click({
         $path = Browse-ForProject
-        if ([string]::IsNullOrWhiteSpace($path)) { return }
+        if (-not $path) { return }
         try { $path = Remember-Project -Path $path } catch { return }
         $list.Items.Clear()
         foreach ($saved in @(Get-SavedProjects)) { [void]$list.Items.Add($saved) }
@@ -435,11 +486,27 @@ function Select-SavedProject {
         $scan.Enabled = ($list.Items.Count -gt 0)
         if ($list.Items.Count -gt 0) {
             $list.SelectedIndex = [Math]::Min($index, $list.Items.Count - 1)
+        } else {
+            $build.Enabled = $false
+            $remove.Enabled = $false
+            $gitPull.Enabled = $false
+            $settings.Enabled = $false
+            & $refreshSummary
         }
     })
 
     $reports.Add_Click({ Show-Reports })
     $scan.Add_Click({ Show-DeviceScan })
+    $gitPull.Add_Click({
+        if ($list.SelectedIndex -lt 0) { return }
+        Invoke-ProjectGitPull -ProjectPath ([string]$list.SelectedItem)
+    })
+    $settings.Add_Click({
+        if ($list.SelectedIndex -lt 0) { return }
+        Invoke-ProjectSettings -ProjectPath ([string]$list.SelectedItem)
+        & $refreshSummary
+    })
+
     $form.Add_Shown({
         if ($list.Items.Count -gt 0) {
             $list.SelectedIndex = 0
@@ -455,11 +522,17 @@ function Select-SavedProject {
 function Invoke-ProjectBuild {
     param([Parameter(Mandatory = $true)][string]$ProjectPath)
 
+    $pref = Get-ProjectPreference -ProjectPath $ProjectPath
     $arguments = @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
         '-File', $runner,
-        '-Project', $ProjectPath
+        '-Project', $ProjectPath,
+        '-GradleTask', $pref.gradleTask
     )
+    if ($pref.preferredApk) { $arguments += @('-PreferredApk', $pref.preferredApk) }
+    if ($pref.javaHome) { $arguments += @('-JavaHome', $pref.javaHome) }
+    if ($pref.autoLaunch) { $arguments += '-AutoLaunch' }
 
     $previousPreference = $ErrorActionPreference
     $exitCode = 1
@@ -478,9 +551,9 @@ $lastExitCode = 0
 $nextProject = $Project
 
 while ($true) {
-    if ([string]::IsNullOrWhiteSpace($nextProject)) {
+    if (-not $nextProject) {
         $nextProject = Select-SavedProject
-        if ([string]::IsNullOrWhiteSpace($nextProject)) { break }
+        if (-not $nextProject) { break }
     }
 
     try { $nextProject = Remember-Project -Path $nextProject } catch { }
