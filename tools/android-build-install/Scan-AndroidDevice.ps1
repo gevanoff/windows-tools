@@ -317,7 +317,7 @@ $adb = Resolve-Adb -GradleRoot $firstGradleRoot
 if (-not $adb) { throw 'adb.exe could not be found.' }
 $serial = Resolve-DeviceSerial -Adb $adb -RequestedSerial $DeviceSerial
 
-$tempBase = if ($env:TEMP) { $env:TEMP } else { $stateRoot }
+$tempBase = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $tempRoot = Join-Path $tempBase 'WindowsTools\android-build-install\scan'
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
