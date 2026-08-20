@@ -5,7 +5,10 @@ param(
     [string]$DeviceSerial,
     [string]$PreferredApk,
     [string]$JavaHome,
-    [switch]$AutoLaunch
+    [switch]$AutoLaunch,
+    [switch]$SkipBuild,
+    [switch]$SkipInstall,
+    [switch]$SuppressSuccessDialog
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +37,9 @@ if ($DeviceSerial) { $childArguments += @('-DeviceSerial', $DeviceSerial) }
 if ($PreferredApk) { $childArguments += @('-PreferredApk', $PreferredApk) }
 if ($JavaHome) { $childArguments += @('-JavaHome', $JavaHome) }
 if ($AutoLaunch) { $childArguments += '-AutoLaunch' }
+if ($SkipBuild) { $childArguments += '-SkipBuild' }
+if ($SkipInstall) { $childArguments += '-SkipInstall' }
+if ($SuppressSuccessDialog) { $childArguments += '-SuppressSuccessDialog' }
 
 @(
     'Android Build and Install',
@@ -46,7 +52,10 @@ if ($AutoLaunch) { $childArguments += '-AutoLaunch' }
     "Gradle task: $GradleTask",
     "Preferred APK: $PreferredApk",
     "JAVA_HOME override: $JavaHome",
+    "Device serial: $DeviceSerial",
     "Auto-launch: $([bool]$AutoLaunch)",
+    "Skip build: $([bool]$SkipBuild)",
+    "Skip install: $([bool]$SkipInstall)",
     ''
 ) | Set-Content -LiteralPath $logPath -Encoding UTF8
 
