@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$Project
+    [Parameter(Mandatory = $true)][string]$Project,
+    [switch]$NoUi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,6 +34,11 @@ function Show-Result {
         [Parameter(Mandatory = $true)][string]$Message,
         [System.Windows.Forms.MessageBoxIcon]$Icon = [System.Windows.Forms.MessageBoxIcon]::Information
     )
+
+    if ($NoUi) {
+        Write-Host $Message
+        return
+    }
 
     [System.Windows.Forms.MessageBox]::Show(
         $Message,

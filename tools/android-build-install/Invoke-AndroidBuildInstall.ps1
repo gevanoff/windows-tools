@@ -5,7 +5,10 @@ param(
     [string]$DeviceSerial,
     [string]$PreferredApk,
     [string]$JavaHome,
-    [switch]$AutoLaunch
+    [switch]$AutoLaunch,
+    [switch]$SkipBuild,
+    [switch]$SkipInstall,
+    [switch]$SuppressSuccessDialog
 )
 
 $ErrorActionPreference = 'Stop'
@@ -383,15 +386,24 @@ try {
         throw "No gradlew.bat was found in the selected directory or within two directory levels below it.`n`nSelected directory:`n$Project"
     }
     $gradleRoot = Select-ItemFromList -Prompt 'Multiple Gradle projects were found. Choose the Android project to build:' -Items $gradleRoots -Label { param($item) $item }
-
     $gradlew = Join-Path $gradleRoot 'gradlew.bat'
-    $adb = Resolve-Adb -GradleRoot $gradleRoot
-    if (-not $adb) {
-        throw 'adb.exe could not be found. Install Android SDK Platform-Tools or configure the Android SDK path.'
+
+    $needsDevice = (-not $SkipInstall) -or $AutoLaunch
+    $adb = $null
+    $device = $null
+    if ($needsDevice) {
+        $adb = Resolve-Adb -GradleRoot $gradleRoot
+        if (-not $adb) {
+            throw 'adb.exe could not be found. Install Android SDK Platform-Tools or configure the Android SDK path.'
+        }
+        $device = Resolve-Device -Adb $adb -RequestedSerial $DeviceSerial
+        $env:ANDROID_SERIAL = $device.Serial
     }
 
-    $java = Resolve-Java -OverrideJavaHome $JavaHome
-    $device = Resolve-Device -Adb $adb -RequestedSerial $DeviceSerial
+    $java = '(not needed)'
+    if (-not $SkipBuild) {
+        $java = Resolve-Java -OverrideJavaHome $JavaHome
+    }
 
     Write-Host ''
     Write-Host 'Android Build and Install'
@@ -401,55 +413,77 @@ try {
     Write-Host "Gradle root:     $gradleRoot"
     Write-Host "Gradle task:     $GradleTask"
     Write-Host "Java:            $java"
-    Write-Host "adb:             $adb"
-    Write-Host "Device:          $($device.Model) [$($device.Serial)]"
+    Write-Host "Build:           $(if ($SkipBuild) { 'skip' } else { 'run' })"
+    Write-Host "Install:         $(if ($SkipInstall) { 'skip' } else { 'run' })"
+    if ($needsDevice) {
+        Write-Host "adb:             $adb"
+        Write-Host "Device:          $($device.Model) [$($device.Serial)]"
+    }
     Write-Host "Auto-launch:     $([bool]$AutoLaunch)"
     if ($PreferredApk) { Write-Host "APK preference:  $PreferredApk" }
     Write-Host ''
 
-    $env:ANDROID_SERIAL = $device.Serial
-
-    Push-Location $gradleRoot
-    try {
-        Write-Host "Running: gradlew.bat $GradleTask --stacktrace"
-        Write-Host ''
-        $previousPreference = $ErrorActionPreference
+    if (-not $SkipBuild) {
+        Push-Location $gradleRoot
         try {
-            $ErrorActionPreference = 'Continue'
-            & $gradlew $GradleTask '--stacktrace'
-            $gradleExitCode = [int]$LASTEXITCODE
+            Write-Host "Running: gradlew.bat $GradleTask --stacktrace"
+            Write-Host ''
+            $previousPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                & $gradlew $GradleTask '--stacktrace'
+                $gradleExitCode = [int]$LASTEXITCODE
+            }
+            finally {
+                $ErrorActionPreference = $previousPreference
+            }
         }
         finally {
-            $ErrorActionPreference = $previousPreference
+            Pop-Location
+        }
+
+        if ($gradleExitCode -ne 0) {
+            throw "Gradle failed with exit code $gradleExitCode. The APK was not installed."
         }
     }
-    finally {
-        Pop-Location
-    }
-
-    if ($gradleExitCode -ne 0) {
-        throw "Gradle failed with exit code $gradleExitCode. The APK was not installed."
+    else {
+        Write-Host 'Skipping Gradle build and reusing existing APK output.'
     }
 
     $apkCandidates = @(Get-ApkCandidates -GradleRoot $gradleRoot)
     if ($apkCandidates.Count -eq 0) {
-        throw "The Gradle build succeeded, but no APK was found under build\outputs\apk."
+        throw "No APK was found under build\outputs\apk."
     }
 
-    $apk = Resolve-Apk -Candidates $apkCandidates -Preferred $PreferredApk -ProjectRoot $Project -GradleRoot $gradleRoot
+    # A pure build-only stage does not need to choose an APK. This is important
+    # for Sync & Run: a project may legitimately produce multiple APKs, and the
+    # later status/scan stage can apply its deterministic preferred/conventional
+    # APK policy without prompting during the build itself.
+    $needsSelectedApk = (-not $SkipInstall) -or $AutoLaunch
+    $apk = $null
+    if ($needsSelectedApk) {
+        $apk = Resolve-Apk -Candidates $apkCandidates -Preferred $PreferredApk -ProjectRoot $Project -GradleRoot $gradleRoot
+    }
 
-    Write-Host ''
-    Write-Host "Installing: $($apk.FullName)"
-    Write-Host ''
-    $install = Invoke-NativeCaptured -FilePath $adb -Arguments @('-s', $device.Serial, 'install', '-r', $apk.FullName)
-    foreach ($line in $install.Output) { Write-Host $line }
+    $installSummary = 'Install skipped.'
+    if (-not $SkipInstall) {
+        Write-Host ''
+        Write-Host "Installing: $($apk.FullName)"
+        Write-Host ''
+        $install = Invoke-NativeCaptured -FilePath $adb -Arguments @('-s', $device.Serial, 'install', '-r', $apk.FullName)
+        foreach ($line in $install.Output) { Write-Host $line }
 
-    if ($install.ExitCode -ne 0) {
-        $combined = $install.Output -join [Environment]::NewLine
-        if ($combined -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE') {
-            throw "Android rejected the update because the installed app has a different signing key. The tool will not uninstall it automatically because uninstalling would remove its app data."
+        if ($install.ExitCode -ne 0) {
+            $combined = $install.Output -join [Environment]::NewLine
+            if ($combined -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE') {
+                throw "Android rejected the update because the installed app has a different signing key. The tool will not uninstall it automatically because uninstalling would remove its app data."
+            }
+            throw "adb install failed with exit code $($install.ExitCode).`n`n$combined"
         }
-        throw "adb install failed with exit code $($install.ExitCode).`n`n$combined"
+        $installSummary = 'APK installed with adb install -r.'
+    }
+    else {
+        Write-Host 'Skipping APK installation.'
     }
 
     $launchSummary = 'Auto-launch disabled.'
@@ -458,7 +492,7 @@ try {
         $packageId = if ($inspector) { Get-PackageId -Apk $apk -Inspector $inspector } else { $null }
 
         if (-not $packageId) {
-            $launchSummary = 'Installed successfully, but the package ID could not be determined for auto-launch.'
+            $launchSummary = 'The package ID could not be determined for auto-launch.'
             Write-Warning $launchSummary
         }
         else {
@@ -478,27 +512,29 @@ try {
                 $launchSummary = "Launched $packageId."
             }
             else {
-                $launchSummary = "Installed successfully, but auto-launch failed for $packageId."
+                $launchSummary = "Auto-launch failed for $packageId."
                 Write-Warning $launchSummary
             }
         }
     }
 
+    $buildSummary = if ($SkipBuild) { 'Build skipped; existing APK reused.' } else { 'Gradle build completed successfully.' }
+    $deviceSummary = if ($null -ne $device) { "Device: $($device.Model) [$($device.Serial)]" } else { 'Device: not required for this stage.' }
+    $apkSummary = if ($null -ne $apk) { $apk.Name } else { "($($apkCandidates.Count) APK output(s) available)" }
     $successMessage = @"
-Build and install completed successfully.
+Android operation completed successfully.
 
-Device: $($device.Model)
-Serial: $($device.Serial)
-APK: $($apk.Name)
-Gradle task: $GradleTask
+$buildSummary
+$installSummary
 $launchSummary
-
-The app was installed with adb install -r, which preserves existing app data when Android permits the update.
+$deviceSummary
+APK: $apkSummary
+Gradle task: $GradleTask
 "@
 
     Write-Host ''
     Write-Host 'Success.'
-    Show-Info $successMessage
+    if (-not $SuppressSuccessDialog) { Show-Info $successMessage }
     exit 0
 }
 catch {
