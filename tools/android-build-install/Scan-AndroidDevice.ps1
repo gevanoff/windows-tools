@@ -2,10 +2,53 @@
 param(
     [Parameter(Mandatory = $true)][string[]]$Project,
     [string]$DeviceSerial,
-    [string]$PreferredApk
+    [string]$PreferredApk,
+    [Parameter(ValueFromRemainingArguments = $true)][object[]]$RemainingArguments
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Array splatting into another PowerShell script treats strings such as
+# '-Project' as positional values rather than reparsing them as named
+# parameters. Recover that malformed call shape defensively so a bad internal
+# handoff cannot turn a parameter name into a project path.
+if ($Project.Count -eq 1 -and $Project[0] -eq '-Project' -and $DeviceSerial) {
+    $legacyArguments = @('-Project', $DeviceSerial)
+    if ($PreferredApk) { $legacyArguments += $PreferredApk }
+    $legacyArguments += @($RemainingArguments)
+
+    $Project = @()
+    $DeviceSerial = $null
+    $PreferredApk = $null
+    $RemainingArguments = @()
+
+    for ($i = 0; $i -lt $legacyArguments.Count; $i++) {
+        $token = [string]$legacyArguments[$i]
+        switch ($token) {
+            '-Project' {
+                if (($i + 1) -ge $legacyArguments.Count) { throw 'Internal scanner call supplied -Project without a value.' }
+                $i++
+                $Project += [string]$legacyArguments[$i]
+            }
+            '-DeviceSerial' {
+                if (($i + 1) -ge $legacyArguments.Count) { throw 'Internal scanner call supplied -DeviceSerial without a value.' }
+                $i++
+                $DeviceSerial = [string]$legacyArguments[$i]
+            }
+            '-PreferredApk' {
+                if (($i + 1) -ge $legacyArguments.Count) { throw 'Internal scanner call supplied -PreferredApk without a value.' }
+                $i++
+                $PreferredApk = [string]$legacyArguments[$i]
+            }
+            default {
+                throw "Unexpected internal scanner argument: $token"
+            }
+        }
+    }
+}
+elseif (@($RemainingArguments).Count -gt 0) {
+    throw "Unexpected positional scanner argument(s): $($RemainingArguments -join ' ')"
+}
 
 function Invoke-NativeCaptured {
     param(

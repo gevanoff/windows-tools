@@ -196,11 +196,13 @@ try {
 
     Write-Host ''
     Write-Host 'Comparing local APK with the attached device...'
-    $scanArgs = @('-Project', $projectPath)
-    if ($preference.deviceSerial) { $scanArgs += @('-DeviceSerial', $preference.deviceSerial) }
-    if ($preference.preferredApk) { $scanArgs += @('-PreferredApk', $preference.preferredApk) }
+    $scanParameters = @{
+        Project = @($projectPath)
+    }
+    if ($preference.deviceSerial) { $scanParameters.DeviceSerial = $preference.deviceSerial }
+    if ($preference.preferredApk) { $scanParameters.PreferredApk = $preference.preferredApk }
 
-    $scan = @(& $scanner @scanArgs)
+    $scan = @(& $scanner @scanParameters)
     if ($scan.Count -eq 0) { throw 'Device comparison did not return a result.' }
     $deviceStatus = [string]$scan[0].Status
     Write-Host "Device comparison: $deviceStatus"
