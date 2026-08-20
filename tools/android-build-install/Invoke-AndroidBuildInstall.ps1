@@ -454,7 +454,16 @@ try {
     if ($apkCandidates.Count -eq 0) {
         throw "No APK was found under build\outputs\apk."
     }
-    $apk = Resolve-Apk -Candidates $apkCandidates -Preferred $PreferredApk -ProjectRoot $Project -GradleRoot $gradleRoot
+
+    # A pure build-only stage does not need to choose an APK. This is important
+    # for Sync & Run: a project may legitimately produce multiple APKs, and the
+    # later status/scan stage can apply its deterministic preferred/conventional
+    # APK policy without prompting during the build itself.
+    $needsSelectedApk = (-not $SkipInstall) -or $AutoLaunch
+    $apk = $null
+    if ($needsSelectedApk) {
+        $apk = Resolve-Apk -Candidates $apkCandidates -Preferred $PreferredApk -ProjectRoot $Project -GradleRoot $gradleRoot
+    }
 
     $installSummary = 'Install skipped.'
     if (-not $SkipInstall) {
@@ -511,6 +520,7 @@ try {
 
     $buildSummary = if ($SkipBuild) { 'Build skipped; existing APK reused.' } else { 'Gradle build completed successfully.' }
     $deviceSummary = if ($null -ne $device) { "Device: $($device.Model) [$($device.Serial)]" } else { 'Device: not required for this stage.' }
+    $apkSummary = if ($null -ne $apk) { $apk.Name } else { "($($apkCandidates.Count) APK output(s) available)" }
     $successMessage = @"
 Android operation completed successfully.
 
@@ -518,7 +528,7 @@ $buildSummary
 $installSummary
 $launchSummary
 $deviceSummary
-APK: $($apk.Name)
+APK: $apkSummary
 Gradle task: $GradleTask
 "@
 
