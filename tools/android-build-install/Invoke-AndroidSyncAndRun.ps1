@@ -91,6 +91,14 @@ function Show-Summary {
     ) | Out-Null
 }
 
+function Assert-DeterministicBuildStatus {
+    param([Parameter(Mandatory = $true)]$Status)
+
+    if ($Status.BuildStatus -in @('Ambiguous', 'Preferred missing', 'Preferred invalid', 'No Gradle')) {
+        throw "Sync & Run cannot choose a deterministic APK because local build status is '$($Status.BuildStatus)'. Open Settings and configure a preferred APK or correct the project layout. $($Status.BuildDetail)"
+    }
+}
+
 try {
     $projectPath = Normalize-Path -Path $Project
     if (-not (Test-Path -LiteralPath $projectPath -PathType Container)) {
@@ -154,9 +162,7 @@ try {
         $actions.Add("Git: $($status.GitStatus.ToLowerInvariant()).")
     }
 
-    if ($status.BuildStatus -in @('Ambiguous', 'Preferred missing', 'Preferred invalid', 'No Gradle')) {
-        throw "Sync & Run cannot choose a deterministic APK because local build status is '$($status.BuildStatus)'. Open Settings and configure a preferred APK or correct the project layout. $($status.BuildDetail)"
-    }
+    Assert-DeterministicBuildStatus -Status $status
 
     $needsBuild = $status.BuildStatus -ne 'Fresh'
     if ($needsBuild) {
@@ -175,6 +181,14 @@ try {
         $buildExit = Invoke-Child -File $runner -Arguments $buildArgs
         if ($buildExit -ne 0) { throw "Build stage failed with exit code $buildExit." }
         $actions.Add('Build: rebuilt local APK.')
+
+        # Re-evaluate APK selection after the build. A project that had no APK
+        # before building can produce multiple outputs; Sync & Run must not fall
+        # into an interactive APK chooser in that case.
+        $afterBuild = @(& $statusHelper -Project @($projectPath) -PreferencesPath $PreferencesPath -SkipDevice)
+        if ($afterBuild.Count -eq 0) { throw 'Could not validate APK output after building.' }
+        $status = $afterBuild[0]
+        Assert-DeterministicBuildStatus -Status $status
     }
     else {
         $actions.Add('Build: existing APK is fresh; rebuild skipped.')
