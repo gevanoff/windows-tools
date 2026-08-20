@@ -26,6 +26,49 @@ $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $logPath = Join-Path $logRoot "android-build-install-$timestamp.log"
 $implementation = Join-Path $PSScriptRoot 'Invoke-AndroidBuildInstall.ps1'
 
+function Get-BuildTargetApk {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectRoot,
+        [string]$Preferred
+    )
+
+    if ($Preferred) {
+        try {
+            $preferredPath = if ([System.IO.Path]::IsPathRooted($Preferred)) {
+                [System.IO.Path]::GetFullPath($Preferred)
+            } else {
+                [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot $Preferred))
+            }
+            if (Test-Path -LiteralPath $preferredPath -PathType Leaf) {
+                return Get-Item -LiteralPath $preferredPath
+            }
+        }
+        catch { }
+    }
+
+    $candidates = @(Get-ChildItem -LiteralPath $ProjectRoot -Filter '*.apk' -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.FullName -match '(?i)\\build\\outputs\\apk\\' -and
+            $_.FullName -notmatch '(?i)\\androidTest\\'
+        })
+
+    if ($candidates.Count -eq 0) { return $null }
+
+    $debug = @($candidates | Where-Object {
+        $_.FullName -match '(?i)\\debug\\' -or $_.Name -match '(?i)debug.*\.apk$'
+    })
+    if ($debug.Count -gt 0) { $candidates = $debug }
+
+    if ($candidates.Count -eq 1) { return $candidates[0] }
+
+    $conventional = @($candidates | Where-Object {
+        $_.FullName -match '(?i)\\app\\build\\outputs\\apk\\debug\\app-debug\.apk$'
+    })
+    if ($conventional.Count -eq 1) { return $conventional[0] }
+
+    return $null
+}
+
 $childArguments = @(
     '-NoProfile',
     '-ExecutionPolicy', 'Bypass',
@@ -76,6 +119,22 @@ try {
 }
 finally {
     $ErrorActionPreference = $previousPreference
+}
+
+if ($exitCode -eq 0 -and -not $SkipBuild) {
+    $builtApk = Get-BuildTargetApk -ProjectRoot $Project -Preferred $PreferredApk
+    if ($null -ne $builtApk) {
+        $validatedAt = [DateTime]::UtcNow
+        $builtApk.LastWriteTimeUtc = $validatedAt
+        $freshnessMessage = "Build freshness: validated $($builtApk.FullName) at $($validatedAt.ToString('o'))"
+        Write-Host $freshnessMessage
+        Add-Content -LiteralPath $logPath -Encoding UTF8 -Value $freshnessMessage
+    }
+    else {
+        $freshnessMessage = 'Build freshness: no deterministic APK target could be identified; artifact timestamp was not adjusted.'
+        Write-Host $freshnessMessage
+        Add-Content -LiteralPath $logPath -Encoding UTF8 -Value $freshnessMessage
+    }
 }
 
 Add-Content -LiteralPath $logPath -Encoding UTF8 -Value @(
