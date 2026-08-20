@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string[]]$Project,
-    [string]$DeviceSerial
+    [string]$DeviceSerial,
+    [string]$PreferredApk
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,9 +112,6 @@ function Resolve-ApkInspector {
         $buildTools = Join-Path $root 'build-tools'
         if (-not (Test-Path -LiteralPath $buildTools -PathType Container)) { continue }
 
-        # AAPT2 is present in modern Build-Tools. Version directory names are
-        # two-digit+ Android SDK versions in supported AAPT2 releases, so name
-        # sorting selects the newest installed tool in normal Android SDKs.
         $directories = @(Get-ChildItem -LiteralPath $buildTools -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
         foreach ($directory in $directories) {
             $aapt2 = Join-Path $directory.FullName 'aapt2.exe'
@@ -160,7 +158,7 @@ function Resolve-DeviceSerial {
         throw 'No authorized Android device was found.'
     }
     if ($ready.Count -gt 1) {
-        throw 'Multiple authorized Android devices are connected. Disconnect extras before scanning, or run the scanner with -DeviceSerial.'
+        throw 'Multiple authorized Android devices are connected. Choose and remember a preferred device in project settings, disconnect extras, or run the scanner with -DeviceSerial.'
     }
 
     return $ready[0]
@@ -205,12 +203,35 @@ function Get-ApkCandidates {
 }
 
 function Resolve-LocalApk {
-    param([Parameter(Mandatory = $true)][string]$GradleRoot)
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectRoot,
+        [Parameter(Mandatory = $true)][string]$GradleRoot,
+        [string]$Preferred
+    )
 
     $candidates = @(Get-ApkCandidates -GradleRoot $GradleRoot)
     if ($candidates.Count -eq 0) {
         return [pscustomobject]@{ Apk = $null; Detail = 'No local APK has been built.' }
     }
+
+    if ($Preferred) {
+        try {
+            $preferredPath = if ([System.IO.Path]::IsPathRooted($Preferred)) {
+                [System.IO.Path]::GetFullPath($Preferred)
+            } else {
+                [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot $Preferred))
+            }
+            $match = @($candidates | Where-Object { $_.FullName -ieq $preferredPath })
+            if ($match.Count -eq 1) {
+                return [pscustomobject]@{ Apk = $match[0]; Detail = 'Using configured preferred APK.' }
+            }
+            return [pscustomobject]@{ Apk = $null; Detail = "Configured preferred APK is not present: $Preferred" }
+        }
+        catch {
+            return [pscustomobject]@{ Apk = $null; Detail = "Configured preferred APK path is invalid: $Preferred" }
+        }
+    }
+
     if ($candidates.Count -eq 1) {
         return [pscustomobject]@{ Apk = $candidates[0]; Detail = '' }
     }
@@ -282,6 +303,9 @@ function New-ScanResult {
 
 $validProjects = @($Project | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) })
 if ($validProjects.Count -eq 0) { throw 'No valid saved project folders were supplied.' }
+if ($PreferredApk -and $validProjects.Count -gt 1) {
+    throw '-PreferredApk can only be used when scanning one project.'
+}
 
 $firstGradleRoot = $null
 foreach ($projectPath in $validProjects) {
@@ -309,7 +333,7 @@ foreach ($projectPath in $validProjects) {
     }
 
     $gradleRoot = $gradleRoots[0]
-    $local = Resolve-LocalApk -GradleRoot $gradleRoot
+    $local = Resolve-LocalApk -ProjectRoot $projectPath -GradleRoot $gradleRoot -Preferred $PreferredApk
     if ($null -eq $local.Apk) {
         $status = if ($local.Detail -like 'No local APK*') { 'No local build' } else { 'Unknown' }
         New-ScanResult -ProjectPath $projectPath -Status $status -Detail $local.Detail -Device $serial
