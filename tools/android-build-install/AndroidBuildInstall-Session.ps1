@@ -227,9 +227,12 @@ function Get-StatusResults {
         throw "Status helper was not found:`n$statusHelper"
     }
 
-    $arguments = @('-Project') + @($Projects) + @('-PreferencesPath', $preferencesPath)
-    if ($FetchRemote) { $arguments += '-FetchRemote' }
-    return @(& $statusHelper @arguments)
+    $splat = @{
+        Project = @($Projects)
+        PreferencesPath = $preferencesPath
+    }
+    if ($FetchRemote) { $splat.FetchRemote = $true }
+    return @(& $statusHelper @splat)
 }
 
 function Show-DeviceScan {
@@ -391,6 +394,7 @@ function Select-SavedProjectAction {
     $list.FullRowSelect = $true
     $list.GridLines = $true
     $list.MultiSelect = $false
+    $list.ShowItemToolTips = $true
     [void]$list.Columns.Add('Project', 180)
     [void]$list.Columns.Add('Git', 150)
     [void]$list.Columns.Add('Local Build', 150)
