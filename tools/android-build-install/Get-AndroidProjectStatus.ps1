@@ -340,10 +340,13 @@ foreach ($projectItem in @($Project)) {
 
         if (-not $SkipDevice) {
             try {
-                $scanArgs = @('-Project', $projectPath)
-                if ($preference.deviceSerial) { $scanArgs += @('-DeviceSerial', $preference.deviceSerial) }
-                if ($preference.preferredApk) { $scanArgs += @('-PreferredApk', $preference.preferredApk) }
-                $scan = @(& $scanner @scanArgs)
+                $scanParameters = @{
+                    Project = @($projectPath)
+                }
+                if ($preference.deviceSerial) { $scanParameters.DeviceSerial = $preference.deviceSerial }
+                if ($preference.preferredApk) { $scanParameters.PreferredApk = $preference.preferredApk }
+
+                $scan = @(& $scanner @scanParameters)
                 if ($scan.Count -gt 0) {
                     $deviceStatus = [string]$scan[0].Status
                     $deviceDetail = [string]$scan[0].Detail
