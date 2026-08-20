@@ -14,7 +14,16 @@ $scanner = Join-Path $PSScriptRoot 'Scan-AndroidDevice.ps1'
 
 function Normalize-Path {
     param([Parameter(Mandatory = $true)][string]$Path)
-    return [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetPathRoot($full)
+    if ($full.Length -gt $root.Length) {
+        $full = $full.TrimEnd([char[]]@(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        ))
+    }
+    return $full
 }
 
 function Get-Preference {
@@ -55,15 +64,17 @@ function Invoke-Child {
     )
 
     $previousPreference = $ErrorActionPreference
+    $exitCode = 1
     try {
         $ErrorActionPreference = 'Continue'
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $File @Arguments 2>&1 |
             ForEach-Object { Write-Host "$_" }
-        return [int]$LASTEXITCODE
+        $exitCode = [int]$LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $previousPreference
     }
+    return $exitCode
 }
 
 function Show-Summary {
@@ -95,12 +106,26 @@ try {
     Write-Host "Project: $projectPath"
     Write-Host ''
 
-    $before = @(& $statusHelper -Project @($projectPath) -PreferencesPath $PreferencesPath -FetchRemote -SkipDevice)
+    # Check the device before building, and fetch remote refs without modifying
+    # the working tree so the Git ahead/behind state is current.
+    $before = @(& $statusHelper -Project @($projectPath) -PreferencesPath $PreferencesPath -FetchRemote)
     if ($before.Count -eq 0) { throw 'Could not determine project status.' }
     $status = $before[0]
 
-    Write-Host "Git:   $($status.GitStatus)"
-    Write-Host "Build: $($status.BuildStatus)"
+    Write-Host "Git:    $($status.GitStatus)"
+    Write-Host "Build:  $($status.BuildStatus)"
+    Write-Host "Device: $($status.DeviceStatus)"
+
+    if ($status.DeviceStatus -in @('No device', 'Choose device', 'Preferred absent')) {
+        $instruction = if ($status.DeviceStatus -eq 'Choose device') {
+            'Open Settings for this project, click Detect, and save the preferred device.'
+        } elseif ($status.DeviceStatus -eq 'Preferred absent') {
+            'Connect the remembered device or update the preferred device in Settings.'
+        } else {
+            'Connect and authorize an Android device before running Sync & Run.'
+        }
+        throw "Sync & Run stopped because the device state is '$($status.DeviceStatus)'. $instruction"
+    }
 
     if ($status.GitStatus -eq 'Dirty') {
         throw 'Sync & Run stopped because the working tree has local changes. Commit, stash, or discard them before syncing.'
@@ -127,6 +152,10 @@ try {
     }
     else {
         $actions.Add("Git: $($status.GitStatus.ToLowerInvariant()).")
+    }
+
+    if ($status.BuildStatus -in @('Ambiguous', 'Preferred missing', 'Preferred invalid', 'No Gradle')) {
+        throw "Sync & Run cannot choose a deterministic APK because local build status is '$($status.BuildStatus)'. Open Settings and configure a preferred APK or correct the project layout. $($status.BuildDetail)"
     }
 
     $needsBuild = $status.BuildStatus -ne 'Fresh'
@@ -160,7 +189,7 @@ try {
     $scan = @(& $scanner @scanArgs)
     if ($scan.Count -eq 0) { throw 'Device comparison did not return a result.' }
     $deviceStatus = [string]$scan[0].Status
-    Write-Host "Device: $deviceStatus"
+    Write-Host "Device comparison: $deviceStatus"
 
     if ($deviceStatus -eq 'Same') {
         $actions.Add('Install: device already has the same APK; install skipped.')
@@ -201,7 +230,8 @@ try {
         $installExit = Invoke-Child -File $runner -Arguments $installArgs
         if ($installExit -ne 0) { throw "Install stage failed with exit code $installExit." }
         $actions.Add("Install: completed because device state was '$deviceStatus'.")
-        $actions.Add($(if ($preference.autoLaunch) { 'Launch: app launch requested.' } else { 'Launch: disabled in project settings.' }))
+        if ($preference.autoLaunch) { $actions.Add('Launch: app launch requested.') }
+        else { $actions.Add('Launch: disabled in project settings.') }
     }
 
     $message = "Sync & Run completed successfully.`n`n" + ($actions -join [Environment]::NewLine)
