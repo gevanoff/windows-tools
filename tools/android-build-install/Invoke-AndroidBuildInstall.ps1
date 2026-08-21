@@ -279,12 +279,12 @@ function Resolve-Java {
     param([string]$OverrideJavaHome)
 
     if ($OverrideJavaHome) {
-        $home = [System.IO.Path]::GetFullPath($OverrideJavaHome)
-        $java = Join-Path $home 'bin\java.exe'
+        $javaHomePath = [System.IO.Path]::GetFullPath($OverrideJavaHome)
+        $java = Join-Path $javaHomePath 'bin\java.exe'
         if (-not (Test-Path -LiteralPath $java -PathType Leaf)) {
-            throw "Configured JAVA_HOME does not contain bin\java.exe:`n$home"
+            throw "Configured JAVA_HOME does not contain bin\java.exe:`n$javaHomePath"
         }
-        $env:JAVA_HOME = $home
+        $env:JAVA_HOME = $javaHomePath
         return $java
     }
 
@@ -366,6 +366,36 @@ function Resolve-Apk {
         $sizeMb = [Math]::Round($item.Length / 1MB, 1)
         "$relative  ($sizeMb MB)"
     }
+}
+
+function Resolve-DeterministicApk {
+    param(
+        [Parameter(Mandatory = $true)][System.IO.FileInfo[]]$Candidates,
+        [string]$Preferred,
+        [Parameter(Mandatory = $true)][string]$ProjectRoot
+    )
+
+    if ($Preferred) {
+        try {
+            $preferredPath = if ([System.IO.Path]::IsPathRooted($Preferred)) {
+                [System.IO.Path]::GetFullPath($Preferred)
+            } else {
+                [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot $Preferred))
+            }
+            $preferredMatch = @($Candidates | Where-Object { $_.FullName -ieq $preferredPath })
+            if ($preferredMatch.Count -eq 1) { return $preferredMatch[0] }
+        }
+        catch { }
+    }
+
+    if ($Candidates.Count -eq 1) { return $Candidates[0] }
+
+    $conventional = @($Candidates | Where-Object {
+        $_.FullName -match '(?i)\\app\\build\\outputs\\apk\\debug\\app-debug\.apk$'
+    })
+    if ($conventional.Count -eq 1) { return $conventional[0] }
+
+    return $null
 }
 
 if (-not $Project) {
@@ -463,6 +493,28 @@ try {
     $apk = $null
     if ($needsSelectedApk) {
         $apk = Resolve-Apk -Candidates $apkCandidates -Preferred $PreferredApk -ProjectRoot $Project -GradleRoot $gradleRoot
+    }
+
+    # A successful Gradle invocation validates an unchanged UP-TO-DATE APK as
+    # well as a newly written one. Mark only the deterministically selected
+    # output at build completion so the conservative freshness check does not
+    # request the same successful build forever. This changes file metadata,
+    # not APK bytes or signatures.
+    if (-not $SkipBuild) {
+        $validatedApk = if ($null -ne $apk) {
+            $apk
+        } else {
+            Resolve-DeterministicApk -Candidates $apkCandidates -Preferred $PreferredApk -ProjectRoot $Project
+        }
+
+        if ($null -ne $validatedApk) {
+            $validatedAt = [DateTime]::UtcNow
+            $validatedApk.LastWriteTimeUtc = $validatedAt
+            Write-Host "Build freshness: validated $($validatedApk.FullName) at $($validatedAt.ToString('o'))"
+        }
+        else {
+            Write-Warning 'Build freshness was not recorded because no deterministic APK target could be identified.'
+        }
     }
 
     $installSummary = 'Install skipped.'
