@@ -340,6 +340,20 @@ Direct command-line calls do not use the saved-project dashboard or persistent p
 - saved projects and preferences live under the Windows user's local application-data directory, outside Git repositories;
 - build/install diagnostics are preserved as timestamped reports.
 
+## Developer validation
+
+Run the lightweight integration check from this directory with Windows PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test-AndroidBuildInstall.ps1
+```
+
+It uses an isolated temporary project and state directory; no Android device,
+real JDK, Gradle download, or additional test framework is required. The check
+covers PowerShell parsing, a configured `JAVA_HOME`, paths containing spaces, a
+successful up-to-date build becoming fresh, scanner parameter binding, and a
+non-destructive expected failure path.
+
 ## Possible future improvements
 
 - optional test/lint tasks in Sync & Run before installation;

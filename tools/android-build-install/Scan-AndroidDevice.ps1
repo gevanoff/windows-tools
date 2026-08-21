@@ -8,6 +8,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Windows PowerShell 5.1 can bind a single null/empty placeholder to a
+# ValueFromRemainingArguments array even when the caller supplied no trailing
+# arguments. Remove only those binder placeholders before validating the
+# defensive legacy call shape below.
+$remainingTokens = @($RemainingArguments | Where-Object {
+    $null -ne $_ -and -not [string]::IsNullOrEmpty([string]$_)
+})
+
 # Array splatting into another PowerShell script treats strings such as
 # '-Project' as positional values rather than reparsing them as named
 # parameters. Recover that malformed call shape defensively so a bad internal
@@ -15,7 +23,7 @@ $ErrorActionPreference = 'Stop'
 if ($Project.Count -eq 1 -and $Project[0] -eq '-Project' -and $DeviceSerial) {
     $legacyArguments = @('-Project', $DeviceSerial)
     if ($PreferredApk) { $legacyArguments += $PreferredApk }
-    $legacyArguments += @($RemainingArguments)
+    $legacyArguments += $remainingTokens
 
     $Project = @()
     $DeviceSerial = $null
@@ -46,8 +54,8 @@ if ($Project.Count -eq 1 -and $Project[0] -eq '-Project' -and $DeviceSerial) {
         }
     }
 }
-elseif (@($RemainingArguments).Count -gt 0) {
-    throw "Unexpected positional scanner argument(s): $($RemainingArguments -join ' ')"
+elseif ($remainingTokens.Count -gt 0) {
+    throw "Unexpected positional scanner argument(s): $($remainingTokens -join ' ')"
 }
 
 function Invoke-NativeCaptured {
