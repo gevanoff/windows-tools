@@ -1,12 +1,20 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Project,
-    [Parameter(Mandatory = $true)][string]$PreferencesPath
+    [Parameter(Mandatory = $true)][string]$PreferencesPath,
+    [Parameter(DontShow = $true)][switch]$UiSmokeTest
 )
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$appIconPath = Join-Path $PSScriptRoot 'assets\android-build-install.ico'
+$appIcon = $null
+if (Test-Path -LiteralPath $appIconPath -PathType Leaf) {
+    try { $appIcon = New-Object System.Drawing.Icon($appIconPath) } catch { $appIcon = $null }
+}
 
 function Normalize-Path {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -208,22 +216,31 @@ function Get-ConnectedDevices {
 }
 
 function Select-Device {
-    param([Parameter(Mandatory = $true)][object[]]$Devices)
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Devices,
+        [System.Windows.Forms.IWin32Window]$Owner
+    )
 
     if ($Devices.Count -eq 0) { return $null }
     if ($Devices.Count -eq 1) { return $Devices[0] }
 
     $dialog = New-Object System.Windows.Forms.Form
     $dialog.Text = 'Choose Preferred Android Device'
+    $dialog.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    if ($null -ne $appIcon) { $dialog.Icon = $appIcon }
     $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
     $dialog.ClientSize = New-Object System.Drawing.Size(520, 300)
-    $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
-    $dialog.MaximizeBox = $false
-    $dialog.MinimizeBox = $false
+    $dialog.MinimumSize = New-Object System.Drawing.Size(420, 280)
+    $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Sizable
+    $dialog.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 
     $list = New-Object System.Windows.Forms.ListBox
     $list.Location = New-Object System.Drawing.Point(16, 16)
     $list.Size = New-Object System.Drawing.Size(488, 210)
+    $list.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor
+        [System.Windows.Forms.AnchorStyles]::Bottom -bor
+        [System.Windows.Forms.AnchorStyles]::Left -bor
+        [System.Windows.Forms.AnchorStyles]::Right
     foreach ($entry in $Devices) { [void]$list.Items.Add("$($entry.Model) [$($entry.Serial)]") }
     $dialog.Controls.Add($list)
 
@@ -232,6 +249,7 @@ function Select-Device {
     $ok.Size = New-Object System.Drawing.Size(110, 32)
     $ok.Location = New-Object System.Drawing.Point(286, 248)
     $ok.Enabled = $false
+    $ok.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
     $dialog.Controls.Add($ok)
 
     $cancel = New-Object System.Windows.Forms.Button
@@ -239,6 +257,7 @@ function Select-Device {
     $cancel.Size = New-Object System.Drawing.Size(100, 32)
     $cancel.Location = New-Object System.Drawing.Point(404, 248)
     $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $cancel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
     $dialog.Controls.Add($cancel)
     $dialog.CancelButton = $cancel
 
@@ -252,7 +271,8 @@ function Select-Device {
     $list.Add_DoubleClick({ if ($list.SelectedIndex -ge 0) { $ok.PerformClick() } })
     $list.SelectedIndex = 0
 
-    if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+    $result = if ($null -ne $Owner) { $dialog.ShowDialog($Owner) } else { $dialog.ShowDialog() }
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
     return $dialog.Tag
 }
 
@@ -261,16 +281,23 @@ $preference = Get-Preference -ProjectPath $projectPath
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Android Project Settings'
+$form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+if ($null -ne $appIcon) { $form.Icon = $appIcon }
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
 $form.ClientSize = New-Object System.Drawing.Size(760, 390)
-$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
-$form.MaximizeBox = $false
-$form.MinimizeBox = $false
+$form.MinimumSize = New-Object System.Drawing.Size(640, 430)
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Sizable
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 
 $title = New-Object System.Windows.Forms.Label
 $title.Text = "Project: $projectPath"
-$title.AutoSize = $true
+$title.AutoSize = $false
+$title.AutoEllipsis = $true
 $title.Location = New-Object System.Drawing.Point(16, 16)
+$title.Size = New-Object System.Drawing.Size(704, 24)
+$title.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor
+    [System.Windows.Forms.AnchorStyles]::Left -bor
+    [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($title)
 
 $taskLabel = New-Object System.Windows.Forms.Label
@@ -283,6 +310,9 @@ $task = New-Object System.Windows.Forms.TextBox
 $task.Location = New-Object System.Drawing.Point(150, 54)
 $task.Size = New-Object System.Drawing.Size(570, 24)
 $task.Text = $preference.gradleTask
+$task.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor
+    [System.Windows.Forms.AnchorStyles]::Left -bor
+    [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($task)
 
 $apkLabel = New-Object System.Windows.Forms.Label
@@ -295,12 +325,16 @@ $apk = New-Object System.Windows.Forms.TextBox
 $apk.Location = New-Object System.Drawing.Point(150, 96)
 $apk.Size = New-Object System.Drawing.Size(470, 24)
 $apk.Text = $preference.preferredApk
+$apk.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor
+    [System.Windows.Forms.AnchorStyles]::Left -bor
+    [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($apk)
 
 $apkBrowse = New-Object System.Windows.Forms.Button
 $apkBrowse.Text = 'Browse...'
 $apkBrowse.Size = New-Object System.Drawing.Size(92, 28)
 $apkBrowse.Location = New-Object System.Drawing.Point(628, 94)
+$apkBrowse.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($apkBrowse)
 
 $javaLabel = New-Object System.Windows.Forms.Label
@@ -313,12 +347,16 @@ $java = New-Object System.Windows.Forms.TextBox
 $java.Location = New-Object System.Drawing.Point(150, 138)
 $java.Size = New-Object System.Drawing.Size(470, 24)
 $java.Text = $preference.javaHome
+$java.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor
+    [System.Windows.Forms.AnchorStyles]::Left -bor
+    [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($java)
 
 $javaBrowse = New-Object System.Windows.Forms.Button
 $javaBrowse.Text = 'Browse...'
 $javaBrowse.Size = New-Object System.Drawing.Size(92, 28)
 $javaBrowse.Location = New-Object System.Drawing.Point(628, 136)
+$javaBrowse.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($javaBrowse)
 
 $deviceLabel = New-Object System.Windows.Forms.Label
@@ -331,12 +369,16 @@ $device = New-Object System.Windows.Forms.TextBox
 $device.Location = New-Object System.Drawing.Point(150, 180)
 $device.Size = New-Object System.Drawing.Size(470, 24)
 $device.Text = $preference.deviceSerial
+$device.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor
+    [System.Windows.Forms.AnchorStyles]::Left -bor
+    [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($device)
 
 $deviceDetect = New-Object System.Windows.Forms.Button
 $deviceDetect.Text = 'Detect...'
 $deviceDetect.Size = New-Object System.Drawing.Size(92, 28)
 $deviceDetect.Location = New-Object System.Drawing.Point(628, 178)
+$deviceDetect.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($deviceDetect)
 
 $launch = New-Object System.Windows.Forms.CheckBox
@@ -344,24 +386,32 @@ $launch.Text = 'Launch the app automatically after a successful install'
 $launch.AutoSize = $true
 $launch.Location = New-Object System.Drawing.Point(150, 226)
 $launch.Checked = [bool]$preference.autoLaunch
+$launch.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
 $form.Controls.Add($launch)
 
 $hint = New-Object System.Windows.Forms.Label
 $hint.Text = 'Blank fields use normal defaults. Detect stores the adb serial for this project.'
-$hint.AutoSize = $true
+$hint.AutoSize = $false
+$hint.AutoEllipsis = $true
 $hint.Location = New-Object System.Drawing.Point(150, 258)
+$hint.Size = New-Object System.Drawing.Size(570, 36)
+$hint.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor
+    [System.Windows.Forms.AnchorStyles]::Left -bor
+    [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($hint)
 
 $reset = New-Object System.Windows.Forms.Button
 $reset.Text = 'Reset Defaults'
 $reset.Size = New-Object System.Drawing.Size(120, 32)
 $reset.Location = New-Object System.Drawing.Point(16, 338)
+$reset.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
 $form.Controls.Add($reset)
 
 $save = New-Object System.Windows.Forms.Button
 $save.Text = 'Save'
 $save.Size = New-Object System.Drawing.Size(100, 32)
 $save.Location = New-Object System.Drawing.Point(512, 338)
+$save.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($save)
 
 $cancel = New-Object System.Windows.Forms.Button
@@ -369,6 +419,7 @@ $cancel.Text = 'Cancel'
 $cancel.Size = New-Object System.Drawing.Size(100, 32)
 $cancel.Location = New-Object System.Drawing.Point(620, 338)
 $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+$cancel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($cancel)
 $form.AcceptButton = $save
 $form.CancelButton = $cancel
@@ -398,7 +449,7 @@ $deviceDetect.Add_Click({
         if (-not $adb) { throw 'adb.exe could not be found.' }
         $devices = @(Get-ConnectedDevices -Adb $adb)
         if ($devices.Count -eq 0) { throw 'No authorized Android device is currently connected.' }
-        $selected = Select-Device -Devices $devices
+        $selected = Select-Device -Devices $devices -Owner $form
         if ($null -ne $selected) { $device.Text = [string]$selected.Serial }
     }
     catch {
@@ -443,4 +494,12 @@ $save.Add_Click({
     $form.Close()
 })
 
+$form.Add_Shown({
+    if ($UiSmokeTest) {
+        $form.ClientSize = New-Object System.Drawing.Size(680, 430)
+        $form.Close()
+    }
+})
+
 [void]$form.ShowDialog()
+if ($null -ne $appIcon) { $appIcon.Dispose() }

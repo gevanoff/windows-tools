@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string[]]$Project,
     [string]$PreferencesPath,
     [switch]$FetchRemote,
-    [switch]$SkipDevice
+    [switch]$SkipDevice,
+    [string]$OutputJsonPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -283,6 +284,7 @@ function Get-GitStatus {
     return [pscustomobject]@{ Status = 'Current'; Detail = "$branch matches $upstream." }
 }
 
+$results = @(
 foreach ($projectItem in @($Project)) {
     if ([string]::IsNullOrWhiteSpace($projectItem)) { continue }
 
@@ -385,4 +387,21 @@ foreach ($projectItem in @($Project)) {
             Device = ''
         }
     }
+}
+)
+
+if ($OutputJsonPath) {
+    $outputParent = Split-Path -Parent ([System.IO.Path]::GetFullPath($OutputJsonPath))
+    if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
+        throw "Status output directory does not exist: $outputParent"
+    }
+    $json = ConvertTo-Json -InputObject @($results) -Depth 4
+    [System.IO.File]::WriteAllText(
+        [System.IO.Path]::GetFullPath($OutputJsonPath),
+        $json,
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+}
+else {
+    $results
 }

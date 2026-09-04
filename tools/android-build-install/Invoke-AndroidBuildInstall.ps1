@@ -8,7 +8,8 @@ param(
     [switch]$AutoLaunch,
     [switch]$SkipBuild,
     [switch]$SkipInstall,
-    [switch]$SuppressSuccessDialog
+    [switch]$SuppressSuccessDialog,
+    [switch]$NoUi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +19,7 @@ function Show-Error {
     param([Parameter(Mandatory = $true)][string]$Message)
     Write-Host ''
     Write-Host "ERROR: $Message"
+    if ($NoUi) { return }
     [System.Windows.Forms.MessageBox]::Show(
         $Message,
         'Android Build and Install',
@@ -28,6 +30,10 @@ function Show-Error {
 
 function Show-Info {
     param([Parameter(Mandatory = $true)][string]$Message)
+    if ($NoUi) {
+        Write-Host $Message
+        return
+    }
     [System.Windows.Forms.MessageBox]::Show(
         $Message,
         'Android Build and Install',
@@ -49,10 +55,17 @@ function Select-ItemFromList {
     param(
         [Parameter(Mandatory = $true)][string]$Prompt,
         [Parameter(Mandatory = $true)][object[]]$Items,
-        [Parameter(Mandatory = $true)][scriptblock]$Label
+        [Parameter(Mandatory = $true)][scriptblock]$Label,
+        [string]$NoUiMessage
     )
 
     if ($Items.Count -eq 1) { return $Items[0] }
+    if ($NoUi) {
+        if (-not $NoUiMessage) {
+            $NoUiMessage = "$Prompt Configure an explicit selection before running this operation from the dashboard."
+        }
+        throw $NoUiMessage
+    }
 
     Write-Host ''
     Write-Host $Prompt
@@ -272,7 +285,7 @@ function Resolve-Device {
     return Select-ItemFromList -Prompt 'Multiple Android devices are connected. Choose the install target:' -Items $ready -Label {
         param($item)
         "$($item.Model)  [$($item.Serial)]"
-    }
+    } -NoUiMessage 'Multiple authorized Android devices are connected. Open Settings for this project and save a Preferred device before running Build & Install from the dashboard.'
 }
 
 function Resolve-Java {
@@ -356,6 +369,10 @@ function Resolve-Apk {
             return $matches[0]
         }
 
+        if ($NoUi) {
+            throw "The configured preferred APK was not produced by this build: $preferredPath`nOpen Settings for this project and select an existing Preferred APK before running Build & Install from the dashboard."
+        }
+
         Write-Warning "Configured preferred APK was not produced by this build: $preferredPath"
         Write-Warning 'Falling back to normal APK selection.'
     }
@@ -365,7 +382,7 @@ function Resolve-Apk {
         $relative = $item.FullName.Substring($GradleRoot.Length).TrimStart('\')
         $sizeMb = [Math]::Round($item.Length / 1MB, 1)
         "$relative  ($sizeMb MB)"
-    }
+    } -NoUiMessage 'Multiple APKs were produced and no unique preferred APK could be selected. Open Settings for this project and save the intended Preferred APK before running Build & Install from the dashboard.'
 }
 
 function Resolve-DeterministicApk {
@@ -399,6 +416,7 @@ function Resolve-DeterministicApk {
 }
 
 if (-not $Project) {
+    if ($NoUi) { throw 'A project path is required when running without interactive UI.' }
     $Project = Select-Folder -Description 'Choose an Android project or repository folder'
     if (-not $Project) { Write-Host 'Cancelled.'; exit 0 }
 }
@@ -415,7 +433,8 @@ try {
     if ($gradleRoots.Count -eq 0) {
         throw "No gradlew.bat was found in the selected directory or within two directory levels below it.`n`nSelected directory:`n$Project"
     }
-    $gradleRoot = Select-ItemFromList -Prompt 'Multiple Gradle projects were found. Choose the Android project to build:' -Items $gradleRoots -Label { param($item) $item }
+    $gradleRoot = Select-ItemFromList -Prompt 'Multiple Gradle projects were found. Choose the Android project to build:' -Items $gradleRoots -Label { param($item) $item } `
+        -NoUiMessage 'Multiple Gradle roots were found. Add and select the specific Android project folder containing the intended gradlew.bat, rather than its parent repository, before running Build & Install from the dashboard.'
     $gradlew = Join-Path $gradleRoot 'gradlew.bat'
 
     $needsDevice = (-not $SkipInstall) -or $AutoLaunch
