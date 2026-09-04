@@ -43,6 +43,8 @@ Sync & Run, Build & Install, and the explicit Git Pull action run in the backgro
 
 Use **Cancel** to stop the active PowerShell process and its child process tree, including a running Gradle or ADB command. Closing the dashboard during an operation asks for confirmation before requesting the same cancellation. Dashboard output is bounded so a very large Gradle transcript does not consume memory indefinitely; the complete build/install output remains in the saved report.
 
+Background dashboard operations never wait for hidden console input. If multiple Gradle roots, devices, or APKs require a choice, the operation stops with an actionable message directing you to select a narrower project folder or save the appropriate project setting.
+
 The notification-area icon remains available while the dashboard is running. Double-click it or choose **Open Dashboard** to restore and activate the window. Its menu can cancel the current operation or status refresh, and a notification reports operation completion when the dashboard is not running a UI test.
 
 ## Project status dashboard

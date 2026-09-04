@@ -97,6 +97,24 @@ try {
     Assert-True -Condition ($failureExit -ne 0) -Message 'Missing-project validation unexpectedly succeeded.'
     Assert-True -Condition (-not (Test-Path -LiteralPath $missingProject)) -Message 'Failure-path validation created the missing project directory.'
 
+    $ambiguousProject = Join-Path $testRoot 'ambiguous project'
+    foreach ($moduleName in @('android-one', 'android-two')) {
+        $moduleRoot = Join-Path $ambiguousProject $moduleName
+        New-Item -ItemType Directory -Path $moduleRoot -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $moduleRoot 'gradlew.bat') -Encoding ASCII -Value @('@echo off', 'exit /b 0')
+    }
+    $ambiguityOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $toolRoot 'Invoke-AndroidBuildInstall.ps1') `
+        -Project $ambiguousProject `
+        -SkipBuild `
+        -SkipInstall `
+        -SuppressSuccessDialog `
+        -NoUi 2>&1)
+    $ambiguityExit = [int]$LASTEXITCODE
+    $ambiguityText = $ambiguityOutput -join [Environment]::NewLine
+    Assert-True -Condition ($ambiguityExit -ne 0) -Message 'A background build with ambiguous Gradle roots unexpectedly succeeded.'
+    Assert-True -Condition ($ambiguityText -match 'Multiple Gradle roots were found') -Message "The background ambiguity failure was not actionable.`n$ambiguityText"
+    Assert-True -Condition ($ambiguityText -notmatch 'Choose 1-') -Message "The background ambiguity path attempted to prompt for console input.`n$ambiguityText"
+
     $scannerFailure = ''
     try { & $scanner -Project @($missingProject) | Out-Null } catch { $scannerFailure = $_.Exception.Message }
     Assert-True -Condition ($scannerFailure -eq 'No valid saved project folders were supplied.') -Message "Normal scanner parameter binding failed unexpectedly: $scannerFailure"
@@ -146,7 +164,7 @@ try {
     Assert-True -Condition ($statusText -match 'UI status smoke result: 1/1') -Message "Dashboard status refresh did not complete progressively.`n$statusText"
     Assert-True -Condition ($statusText -match 'UI status row:') -Message "Dashboard status refresh did not populate a project row.`n$statusText"
 
-    Write-Host 'PASS: PowerShell parsing, multi-size app/tray icon loading, configured JAVA_HOME, paths with spaces, build freshness, scanner binding, UI creation/resizing, asynchronous operation completion/cancellation, progressive status refresh, and expected failure behavior.'
+    Write-Host 'PASS: PowerShell parsing, multi-size app/tray icon loading, configured JAVA_HOME, paths with spaces, build freshness, scanner binding, non-interactive ambiguity handling, UI creation/resizing, asynchronous operation completion/cancellation, progressive status refresh, and expected failure behavior.'
 }
 finally {
     $env:LOCALAPPDATA = $previousLocalAppData
