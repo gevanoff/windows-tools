@@ -14,9 +14,13 @@ function Assert-True {
 
 $toolRoot = $PSScriptRoot
 $runner = Join-Path $toolRoot 'Run-AndroidBuildInstall.ps1'
+$session = Join-Path $toolRoot 'AndroidBuildInstall-Session.ps1'
+$settingsEditor = Join-Path $toolRoot 'Edit-AndroidProjectPreferences.ps1'
 $statusHelper = Join-Path $toolRoot 'Get-AndroidProjectStatus.ps1'
 $gitUpdater = Join-Path $toolRoot 'Update-AndroidRepo.ps1'
 $scanner = Join-Path $toolRoot 'Scan-AndroidDevice.ps1'
+$iconPng = Join-Path $toolRoot 'assets\android-build-install-icon.png'
+$iconPath = Join-Path $toolRoot 'assets\android-build-install.ico'
 $tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $testRoot = Join-Path $tempBase ("WindowsTools Android Test {0}" -f [Guid]::NewGuid().ToString('N'))
 $previousLocalAppData = $env:LOCALAPPDATA
@@ -32,6 +36,31 @@ try {
         ) | Out-Null
         Assert-True -Condition ($parseErrors.Count -eq 0) -Message "PowerShell parse errors in $($script.Name): $($parseErrors -join '; ')"
     }
+
+    Assert-True -Condition (Test-Path -LiteralPath $iconPng -PathType Leaf) -Message 'The source application icon is missing.'
+    Assert-True -Condition (Test-Path -LiteralPath $iconPath -PathType Leaf) -Message 'The Windows application/tray icon is missing.'
+    Add-Type -AssemblyName System.Drawing
+    $sourceIcon = [System.Drawing.Bitmap]::FromFile($iconPng)
+    try {
+        Assert-True -Condition ($sourceIcon.GetPixel(0, 0).A -eq 0) -Message 'The source icon does not retain a transparent background.'
+    }
+    finally { $sourceIcon.Dispose() }
+
+    $loadedIcon = New-Object System.Drawing.Icon($iconPath)
+    try {
+        Assert-True -Condition ($loadedIcon.Width -gt 0 -and $loadedIcon.Height -gt 0) -Message 'The Windows icon could not be decoded.'
+        $iconBytes = [System.IO.File]::ReadAllBytes($iconPath)
+        $iconImageCount = [BitConverter]::ToUInt16($iconBytes, 4)
+        Assert-True -Condition ($iconImageCount -ge 5) -Message "The Windows icon contains only $iconImageCount image sizes."
+        $iconSizes = @(
+            for ($iconIndex = 0; $iconIndex -lt $iconImageCount; $iconIndex++) {
+                $encodedWidth = [int]$iconBytes[6 + (16 * $iconIndex)]
+                if ($encodedWidth -eq 0) { 256 } else { $encodedWidth }
+            }
+        )
+        Assert-True -Condition ($iconSizes -contains 16 -and $iconSizes -contains 32 -and $iconSizes -contains 256) -Message "The Windows icon is missing a required small or large frame: $($iconSizes -join ', ')."
+    }
+    finally { $loadedIcon.Dispose() }
 
     $projectRoot = Join-Path $testRoot 'project with spaces'
     $apkPath = Join-Path $projectRoot 'app\build\outputs\apk\debug\app-debug.apk'
@@ -72,7 +101,52 @@ try {
     try { & $scanner -Project @($missingProject) | Out-Null } catch { $scannerFailure = $_.Exception.Message }
     Assert-True -Condition ($scannerFailure -eq 'No valid saved project folders were supplied.') -Message "Normal scanner parameter binding failed unexpectedly: $scannerFailure"
 
-    Write-Host 'PASS: PowerShell parsing, configured JAVA_HOME, paths with spaces, build freshness, scanner binding, and expected failure behavior.'
+    $sessionOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session -UiSmokeTest 2>&1)
+    $sessionExit = [int]$LASTEXITCODE
+    Assert-True -Condition ($sessionExit -eq 0) -Message "Dashboard UI smoke test failed with exit code $sessionExit.`n$($sessionOutput -join [Environment]::NewLine)"
+
+    $preferencesPath = Join-Path $env:LOCALAPPDATA 'project-preferences.json'
+    $settingsOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $settingsEditor `
+        -Project $projectRoot `
+        -PreferencesPath $preferencesPath `
+        -UiSmokeTest 2>&1)
+    $settingsExit = [int]$LASTEXITCODE
+    Assert-True -Condition ($settingsExit -eq 0) -Message "Settings UI smoke test failed with exit code $settingsExit.`n$($settingsOutput -join [Environment]::NewLine)"
+
+    $operationOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session `
+        -Project $missingProject `
+        -UiSmokeTestOperation 2>&1)
+    $operationExit = [int]$LASTEXITCODE
+    Assert-True -Condition ($operationExit -ne 0) -Message 'Dashboard operation smoke test unexpectedly succeeded for a missing project.'
+    Assert-True -Condition (($operationOutput -join [Environment]::NewLine) -match 'UI operation smoke result:') -Message "Dashboard operation controller did not report completion.`n$($operationOutput -join [Environment]::NewLine)"
+    Assert-True -Condition (($operationOutput -join [Environment]::NewLine) -match 'The project path is not a directory') -Message "Dashboard operation output did not capture the child failure.`n$($operationOutput -join [Environment]::NewLine)"
+    Assert-True -Condition (($operationOutput -join [Environment]::NewLine).Contains($missingProject)) -Message "Dashboard operation did not preserve the project path containing spaces.`n$($operationOutput -join [Environment]::NewLine)"
+    Assert-True -Condition (-not (Test-Path -LiteralPath $missingProject)) -Message 'Dashboard operation failure created the missing project directory.'
+
+    $successOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session -UiSmokeTestOperationSuccess 2>&1)
+    $successExit = [int]$LASTEXITCODE
+    $successText = $successOutput -join [Environment]::NewLine
+    Assert-True -Condition ($successExit -eq 0) -Message "Dashboard operation success smoke test failed with exit code $successExit.`n$successText"
+    Assert-True -Condition ($successText -match 'Smoke operation completed successfully') -Message "Dashboard did not capture successful child output.`n$successText"
+    Assert-True -Condition ($successText -match 'Completed successfully\. Exit code: 0') -Message "Dashboard did not report successful completion.`n$successText"
+
+    $cancelOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session -UiSmokeTestCancellation 2>&1)
+    $cancelExit = [int]$LASTEXITCODE
+    $cancelText = $cancelOutput -join [Environment]::NewLine
+    Assert-True -Condition ($cancelExit -ne 0) -Message 'Dashboard cancellation smoke test unexpectedly succeeded.'
+    Assert-True -Condition ($cancelText -match 'Cancellation requested') -Message "Dashboard cancellation did not reach the process runner.`n$cancelText"
+    Assert-True -Condition ($cancelText -notmatch 'completed unexpectedly') -Message "Dashboard cancellation left the child operation running.`n$cancelText"
+
+    $statusOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session `
+        -Project $projectRoot `
+        -UiSmokeTestStatusRefresh 2>&1)
+    $statusExit = [int]$LASTEXITCODE
+    $statusText = $statusOutput -join [Environment]::NewLine
+    Assert-True -Condition ($statusExit -eq 0) -Message "Dashboard status refresh smoke test failed with exit code $statusExit.`n$statusText"
+    Assert-True -Condition ($statusText -match 'UI status smoke result: 1/1') -Message "Dashboard status refresh did not complete progressively.`n$statusText"
+    Assert-True -Condition ($statusText -match 'UI status row:') -Message "Dashboard status refresh did not populate a project row.`n$statusText"
+
+    Write-Host 'PASS: PowerShell parsing, multi-size app/tray icon loading, configured JAVA_HOME, paths with spaces, build freshness, scanner binding, UI creation/resizing, asynchronous operation completion/cancellation, progressive status refresh, and expected failure behavior.'
 }
 finally {
     $env:LOCALAPPDATA = $previousLocalAppData

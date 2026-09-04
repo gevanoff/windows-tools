@@ -22,12 +22,12 @@ The project remains responsible for its normal Gradle dependencies and Android S
 2. Double-click `Build-And-Install-Android.bat`.
 3. The dashboard refreshes each saved project and displays its **Git**, **Local Build**, and **Device** state.
 4. Select a project and use **Sync & Run** for the normal development loop, or choose an explicit lower-level action when needed.
-5. After Build or Sync & Run finishes, the dashboard returns for additional work.
+5. Follow live output in the dashboard while the operation runs. After Build & Install or Sync & Run finishes, project status refreshes for additional work.
 
 The available actions are:
 
 - **Sync & Run** — safely update Git when needed, rebuild only when the local APK is stale/missing, install only when the device differs, and optionally launch the app;
-- **Build** — always run the configured Gradle build, install the selected APK, and optionally launch it;
+- **Build & Install** — always run the configured Gradle build, install the selected APK, and optionally launch it;
 - **Git Pull** — explicitly run the safe fast-forward-only repository update;
 - **Refresh Status** — refresh Git remote state, local APK freshness, and device comparison;
 - **Settings...** — configure persistent project-specific defaults including a preferred device;
@@ -35,7 +35,15 @@ The available actions are:
 - **Reports...** — inspect previous build/install logs;
 - **Add... / Remove** — manage remembered repository paths.
 
-Double-clicking a project remains equivalent to **Build**. The default action button is **Sync & Run**.
+The dashboard is resizable and scales with Windows display settings. It uses a distinct phone/build/install icon in the window, taskbar, and notification area so it is easy to distinguish from a generic PowerShell window. Double-clicking a project and pressing Enter both run the primary **Sync & Run** action. **Build & Install** remains available when an unconditional rebuild is wanted.
+
+### Operation output and cancellation
+
+Sync & Run, Build & Install, and the explicit Git Pull action run in the background while the dashboard remains open for the entire operation. The **Operation output** panel streams PowerShell, Gradle, Git, and ADB output; **Copy Output** copies the visible transcript for troubleshooting. The normal completion, failure, or cancellation result remains visible in the dashboard instead of closing the window.
+
+Use **Cancel** to stop the active PowerShell process and its child process tree, including a running Gradle or ADB command. Closing the dashboard during an operation asks for confirmation before requesting the same cancellation. Dashboard output is bounded so a very large Gradle transcript does not consume memory indefinitely; the complete build/install output remains in the saved report.
+
+The notification-area icon remains available while the dashboard is running. Double-click it or choose **Open Dashboard** to restore and activate the window. Its menu can cancel the current operation or status refresh, and a notification reports operation completion when the dashboard is not running a UI test.
 
 ## Project status dashboard
 
@@ -79,6 +87,8 @@ Examples include:
 - **Preferred absent** — the remembered device is not currently connected/authorized;
 - **Unknown** — an exact comparison cannot safely be made.
 
+Status refreshes run in the background one project at a time, so the dashboard remains responsive. Existing results appear immediately as cached rows; the **Checked** column changes from **Queued** to a check time as each project completes. The upper-right status text shows overall progress. **Cancel Refresh** stops the current status subprocess and leaves completed rows intact, and an unresponsive project check is cancelled after 60 seconds instead of freezing the whole dashboard.
+
 Hovering a status row shows more detailed Git/build/device diagnostics.
 
 ## Sync & Run
@@ -109,7 +119,7 @@ Behind upstream -> Fast-forward pull -> Stale APK -> Build -> Install -> Launch
 Current Git -> Fresh APK -> Not installed -> Install -> Launch
 ```
 
-Sync & Run stops rather than guessing when safety or targeting is ambiguous. In particular it stops on dirty/diverged Git state, unavailable remembered devices, or ambiguous APK selection. The explicit **Build**, **Git Pull**, and **Settings...** actions remain available for handling those cases deliberately.
+Sync & Run stops rather than guessing when safety or targeting is ambiguous. In particular it stops on dirty/diverged Git state, unavailable remembered devices, or ambiguous APK selection. The explicit **Build & Install**, **Git Pull**, and **Settings...** actions remain available for handling those cases deliberately.
 
 Projects that are not Git repositories can still use Sync & Run; the Git update stage is simply skipped.
 
@@ -117,7 +127,7 @@ Projects that are not Git repositories can still use Sync & Run; the Git update 
 
 Drag an Android repository or project folder onto `Build-And-Install-Android.bat` in File Explorer.
 
-The dragged path is used immediately, remembered for future sessions, and **Build** is run using saved per-project settings. After the run finishes, the dashboard opens.
+The dragged path is used immediately, remembered for future sessions, and **Build & Install** starts in the dashboard using saved per-project settings.
 
 Both root-level and nested Android layouts are supported. For example:
 
@@ -134,7 +144,7 @@ prism-break/
         gradlew.bat
 ```
 
-The tool searches for `gradlew.bat` in the selected directory and up to two directory levels below it. If multiple Gradle roots exist, explicit Build may ask which one to use; Sync & Run treats an ambiguous project layout as a condition requiring attention.
+The tool searches for `gradlew.bat` in the selected directory and up to two directory levels below it. If multiple Gradle roots exist, explicit Build & Install may ask which one to use; Sync & Run treats an ambiguous project layout as a condition requiring attention.
 
 ## Saved projects
 
@@ -172,7 +182,7 @@ assembleDemoDebug
 
 ### Preferred APK
 
-When a project produces several debug APKs, a preferred APK can be stored so Build, Scan Device, dashboard status, and Sync & Run all use the same deterministic target.
+When a project produces several debug APKs, a preferred APK can be stored so Build & Install, Scan Device, dashboard status, and Sync & Run all use the same deterministic target.
 
 The path can be absolute or relative to the saved repository path. A relative path is recommended because it remains valid if the entire repository tree is moved together.
 
@@ -182,7 +192,7 @@ For Prism Break, the conventional preferred APK is:
 android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-If a configured preferred APK is missing, the dashboard reports **Preferred missing**. Explicit Build may fall back to its APK chooser; Sync & Run stops and asks for the preference/layout to be corrected rather than guessing.
+If a configured preferred APK is missing, the dashboard reports **Preferred missing**. Explicit Build & Install may fall back to its APK chooser; Sync & Run stops and asks for the preference/layout to be corrected rather than guessing.
 
 ### JAVA_HOME
 
@@ -197,7 +207,7 @@ When blank, Java resolution follows the normal environment:
 
 A project can remember one ADB device serial. Click **Detect...** in Settings to list currently connected/authorized devices and choose one; the serial is stored with that project's preferences.
 
-This is especially useful when more than one phone/tablet/emulator is attached. Build, dashboard status, Scan Device, and Sync & Run then target the remembered device instead of prompting or guessing.
+This is especially useful when more than one phone/tablet/emulator is attached. Build & Install, dashboard status, Scan Device, and Sync & Run then target the remembered device instead of prompting or guessing.
 
 Leave the field blank to retain automatic behavior when only one authorized device is attached.
 
@@ -242,7 +252,7 @@ After a successful build the tool searches Android module output directories und
 build\outputs\apk
 ```
 
-If there is one debug APK it is selected automatically. When several exist, the saved preferred APK is used if it exactly matches a produced APK; otherwise explicit Build asks which one to install.
+If there is one debug APK it is selected automatically. When several exist, the saved preferred APK is used if it exactly matches a produced APK; otherwise explicit Build & Install asks which one to install.
 
 Installation uses:
 
@@ -252,7 +262,7 @@ adb -s <device-serial> install -r <apk>
 
 `-r` replaces an existing installation while preserving app data when Android permits the update.
 
-The internal build/install runner also supports separate build-only, install-only, and launch-only stages. Sync & Run uses those stages to avoid redundant work; normal **Build** retains the familiar full build/install behavior.
+The internal build/install runner also supports separate build-only, install-only, and launch-only stages. Sync & Run uses those stages to avoid redundant work; normal **Build & Install** retains the familiar full build/install behavior.
 
 The tool does **not** automatically uninstall an app when Android reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Uninstalling normally removes local app data, so that remains an explicit user action.
 
@@ -285,7 +295,7 @@ Reports include:
 - ADB install/launch output when those stages ran;
 - final exit code.
 
-Use **Reports...** to browse and open previous runs. If a build/install stage fails, its report also opens automatically in Notepad.
+Use **Reports...** to browse and open previous runs. Dashboard-managed failures remain visible in Operation output and link to the saved reports without opening a competing window. Standalone command-line runs retain the existing failure dialog and automatic Notepad behavior.
 
 ## Finding ADB
 
@@ -301,7 +311,7 @@ The tool does not require `adb` to be on `PATH`. It checks, in order:
 
 - A remembered preferred device is used when configured and available.
 - With no preference and one authorized device, that device is selected automatically.
-- With no preference and multiple authorized devices, explicit Build can ask which target to use; dashboard status reports **Choose device**, and Sync & Run asks you to save a preferred device first.
+- With no preference and multiple authorized devices, explicit Build & Install can ask which target to use; dashboard status reports **Choose device**, and Sync & Run asks you to save a preferred device first.
 - An unauthorized/offline/missing preferred device causes a clear stop rather than silently selecting another device.
 
 ## Command-line use
@@ -350,13 +360,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test-AndroidBuildInsta
 
 It uses an isolated temporary project and state directory; no Android device,
 real JDK, Gradle download, or additional test framework is required. The check
-covers PowerShell parsing, a configured `JAVA_HOME`, paths containing spaces, a
-successful up-to-date build becoming fresh, scanner parameter binding, and a
-non-destructive expected failure path.
+covers PowerShell parsing, loading the multi-size app/tray icon, a configured
+`JAVA_HOME`, paths containing spaces, a successful up-to-date build becoming
+fresh, scanner parameter binding, dashboard and settings UI creation/resizing,
+asynchronous dashboard operation completion, cancellation of an exact child
+process tree, progressive status refresh, and a non-destructive expected failure
+path.
 
 ## Possible future improvements
 
 - optional test/lint tasks in Sync & Run before installation;
-- configurable status refresh behavior for very large repositories;
+- configurable status-refresh timeouts for unusually large repositories;
 - richer Android App Bundle / split-install workflows;
 - optional per-project launch activity override for apps without a conventional launcher activity.

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Project,
-    [Parameter(Mandatory = $true)][string]$PreferencesPath
+    [Parameter(Mandatory = $true)][string]$PreferencesPath,
+    [switch]$NoUi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -82,6 +83,12 @@ function Show-Summary {
         [Parameter(Mandatory = $true)][string]$Message,
         [System.Windows.Forms.MessageBoxIcon]$Icon = [System.Windows.Forms.MessageBoxIcon]::Information
     )
+
+    if ($NoUi) {
+        Write-Host ''
+        Write-Host $Message
+        return
+    }
 
     [System.Windows.Forms.MessageBox]::Show(
         $Message,
@@ -175,6 +182,7 @@ try {
             '-SkipInstall',
             '-SuppressSuccessDialog'
         )
+        if ($NoUi) { $buildArgs += '-NoUi' }
         if ($preference.preferredApk) { $buildArgs += @('-PreferredApk', $preference.preferredApk) }
         if ($preference.javaHome) { $buildArgs += @('-JavaHome', $preference.javaHome) }
 
@@ -219,6 +227,7 @@ try {
                 '-AutoLaunch',
                 '-SuppressSuccessDialog'
             )
+            if ($NoUi) { $launchArgs += '-NoUi' }
             if ($preference.preferredApk) { $launchArgs += @('-PreferredApk', $preference.preferredApk) }
             if ($preference.javaHome) { $launchArgs += @('-JavaHome', $preference.javaHome) }
             if ($preference.deviceSerial) { $launchArgs += @('-DeviceSerial', $preference.deviceSerial) }
@@ -238,6 +247,7 @@ try {
             '-SkipBuild',
             '-SuppressSuccessDialog'
         )
+        if ($NoUi) { $installArgs += '-NoUi' }
         if ($preference.preferredApk) { $installArgs += @('-PreferredApk', $preference.preferredApk) }
         if ($preference.javaHome) { $installArgs += @('-JavaHome', $preference.javaHome) }
         if ($preference.deviceSerial) { $installArgs += @('-DeviceSerial', $preference.deviceSerial) }

@@ -8,7 +8,8 @@ param(
     [switch]$AutoLaunch,
     [switch]$SkipBuild,
     [switch]$SkipInstall,
-    [switch]$SuppressSuccessDialog
+    [switch]$SuppressSuccessDialog,
+    [switch]$NoUi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,6 +41,7 @@ if ($AutoLaunch) { $childArguments += '-AutoLaunch' }
 if ($SkipBuild) { $childArguments += '-SkipBuild' }
 if ($SkipInstall) { $childArguments += '-SkipInstall' }
 if ($SuppressSuccessDialog) { $childArguments += '-SuppressSuccessDialog' }
+if ($NoUi) { $childArguments += '-NoUi' }
 
 @(
     'Android Build and Install',
@@ -84,7 +86,7 @@ Add-Content -LiteralPath $logPath -Encoding UTF8 -Value @(
     "Exit code: $exitCode"
 )
 
-if ($exitCode -ne 0) {
+if ($exitCode -ne 0 -and -not $NoUi) {
     $message = @"
 The Android build/install run failed.
 

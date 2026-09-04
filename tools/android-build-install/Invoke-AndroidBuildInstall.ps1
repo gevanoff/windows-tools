@@ -8,7 +8,8 @@ param(
     [switch]$AutoLaunch,
     [switch]$SkipBuild,
     [switch]$SkipInstall,
-    [switch]$SuppressSuccessDialog
+    [switch]$SuppressSuccessDialog,
+    [switch]$NoUi
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +19,7 @@ function Show-Error {
     param([Parameter(Mandatory = $true)][string]$Message)
     Write-Host ''
     Write-Host "ERROR: $Message"
+    if ($NoUi) { return }
     [System.Windows.Forms.MessageBox]::Show(
         $Message,
         'Android Build and Install',
@@ -28,6 +30,10 @@ function Show-Error {
 
 function Show-Info {
     param([Parameter(Mandatory = $true)][string]$Message)
+    if ($NoUi) {
+        Write-Host $Message
+        return
+    }
     [System.Windows.Forms.MessageBox]::Show(
         $Message,
         'Android Build and Install',
