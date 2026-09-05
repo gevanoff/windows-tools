@@ -9,7 +9,8 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [switch]$SuppressSuccessDialog,
-    [switch]$NoUi
+    [switch]$NoUi,
+    [Parameter(DontShow = $true)][switch]$NoProcessExit
 )
 
 $ErrorActionPreference = 'Stop'
@@ -418,7 +419,11 @@ function Resolve-DeterministicApk {
 if (-not $Project) {
     if ($NoUi) { throw 'A project path is required when running without interactive UI.' }
     $Project = Select-Folder -Description 'Choose an Android project or repository folder'
-    if (-not $Project) { Write-Host 'Cancelled.'; exit 0 }
+    if (-not $Project) {
+        Write-Host 'Cancelled.'
+        if ($NoProcessExit) { return }
+        exit 0
+    }
 }
 
 try {
@@ -606,9 +611,11 @@ Gradle task: $GradleTask
     Write-Host ''
     Write-Host 'Success.'
     if (-not $SuppressSuccessDialog) { Show-Info $successMessage }
+    if ($NoProcessExit) { return }
     exit 0
 }
 catch {
     Show-Error $_.Exception.Message
+    if ($NoProcessExit) { throw }
     exit 1
 }

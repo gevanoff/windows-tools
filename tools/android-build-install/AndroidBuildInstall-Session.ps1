@@ -5,15 +5,23 @@ param(
     [Parameter(DontShow = $true)][switch]$UiSmokeTestOperation,
     [Parameter(DontShow = $true)][switch]$UiSmokeTestOperationSuccess,
     [Parameter(DontShow = $true)][switch]$UiSmokeTestCancellation,
-    [Parameter(DontShow = $true)][switch]$UiSmokeTestStatusRefresh
+    [Parameter(DontShow = $true)][switch]$UiSmokeTestStatusRefresh,
+    [Parameter(DontShow = $true)][switch]$UiSmokeTestInheritedOutput
 )
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+. (Join-Path $PSScriptRoot 'WindowsTaskbarIdentity.ps1')
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $isUiSmokeTest = $UiSmokeTest -or $UiSmokeTestOperation -or $UiSmokeTestOperationSuccess -or
-    $UiSmokeTestCancellation -or $UiSmokeTestStatusRefresh
+    $UiSmokeTestCancellation -or $UiSmokeTestStatusRefresh -or $UiSmokeTestInheritedOutput
+$appUserModelId = Get-AndroidBuildInstallAppId
+$taskbarIdentityAvailable = $null -ne ('WindowsTools.TaskbarIdentity' -as [type])
+if ($taskbarIdentityAvailable) {
+    try { [WindowsTools.TaskbarIdentity]::SetCurrentProcessAppId($appUserModelId) }
+    catch { $taskbarIdentityAvailable = $false }
+}
 
 if ($null -eq ('WindowsTools.BufferedProcessRunner' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -84,8 +92,19 @@ namespace WindowsTools
         public int Finish()
         {
             if (process == null) { throw new InvalidOperationException("No operation process has been started."); }
-            process.WaitForExit();
-            return process.ExitCode;
+            if (IsRunning) { throw new InvalidOperationException("The operation process is still running."); }
+
+            int exitCode = process.ExitCode;
+            // A persistent descendant such as a Gradle daemon can inherit the
+            // redirected handles after the immediate operation process exits.
+            // Give final callbacks a bounded interval, then close our readers
+            // instead of waiting indefinitely for descendant-owned handles.
+            System.Threading.Thread.Sleep(100);
+            try { process.CancelOutputRead(); }
+            catch { }
+            try { process.CancelErrorRead(); }
+            catch { }
+            return exitCode;
         }
 
         public void Cancel()
@@ -141,6 +160,8 @@ $gitUpdater = Join-Path $PSScriptRoot 'Update-AndroidRepo.ps1'
 $statusHelper = Join-Path $PSScriptRoot 'Get-AndroidProjectStatus.ps1'
 $syncRunner = Join-Path $PSScriptRoot 'Invoke-AndroidSyncAndRun.ps1'
 $appIconPath = Join-Path $PSScriptRoot 'assets\android-build-install.ico'
+$taskbarRelaunchCommand = "`"$(Join-Path $PSHOME 'powershell.exe')`" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+$taskbarIconResource = "$appIconPath,0"
 $appIcon = $null
 if (Test-Path -LiteralPath $appIconPath -PathType Leaf) {
     try { $appIcon = New-Object System.Drawing.Icon($appIconPath) } catch { $appIcon = $null }
@@ -321,7 +342,6 @@ function Show-Reports {
     $form.MinimumSize = New-Object System.Drawing.Size(640, 400)
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Sizable
     $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
-
     $label = New-Object System.Windows.Forms.Label
     $label.Text = 'Recent build/install reports:'
     $label.AutoSize = $true
@@ -517,6 +537,22 @@ function Select-SavedProjectAction {
     $form.MinimumSize = New-Object System.Drawing.Size(900, 680)
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Sizable
     $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+    $taskbarIdentityState = [pscustomobject]@{ Applied = $false; Error = $null }
+    if ($taskbarIdentityAvailable) {
+        $form.Add_HandleCreated({
+            try {
+                [WindowsTools.TaskbarIdentity]::SetWindowProperties(
+                    $form.Handle,
+                    $appUserModelId,
+                    $taskbarRelaunchCommand,
+                    'Android Build and Install',
+                    $taskbarIconResource
+                )
+                $taskbarIdentityState.Applied = $true
+            }
+            catch { $taskbarIdentityState.Error = $_.Exception.Message }
+        })
+    }
 
     $title = New-Object System.Windows.Forms.Label
     $title.Text = 'Android project dashboard'
@@ -1221,8 +1257,9 @@ function Select-SavedProjectAction {
             $trayIcon.ShowBalloonTip(3000)
         }
         & $setOperationControls
-        if ($UiSmokeTestOperation -or $UiSmokeTestOperationSuccess -or $UiSmokeTestCancellation) {
+        if ($UiSmokeTestOperation -or $UiSmokeTestOperationSuccess -or $UiSmokeTestCancellation -or $UiSmokeTestInheritedOutput) {
             Write-Host $operationOutput.Text
+            Write-Host "UI operation elapsed seconds: $($elapsed.TotalSeconds)"
             Write-Host "UI operation smoke result: $exitCode"
             $form.Close()
             return
@@ -1250,7 +1287,7 @@ function Select-SavedProjectAction {
 
     $startOperation = {
         param(
-            [ValidateSet('Sync', 'Build', 'GitPull', 'SmokeSuccess', 'SmokeCancel')][string]$Action,
+            [ValidateSet('Sync', 'Build', 'GitPull', 'SmokeSuccess', 'SmokeCancel', 'SmokeInheritedOutput')][string]$Action,
             [string]$ProjectPath
         )
 
@@ -1258,6 +1295,7 @@ function Select-SavedProjectAction {
         if (-not $ProjectPath -and $Action -notlike 'Smoke*') { $ProjectPath = & $selectedPath }
         if ($Action -eq 'SmokeSuccess') { $ProjectPath = '(UI success smoke test)' }
         if ($Action -eq 'SmokeCancel') { $ProjectPath = '(UI cancellation smoke test)' }
+        if ($Action -eq 'SmokeInheritedOutput') { $ProjectPath = '(UI inherited-output smoke test)' }
         if (-not $ProjectPath) { return }
 
         $displayName = if ($Action -eq 'Sync') {
@@ -1268,6 +1306,8 @@ function Select-SavedProjectAction {
             'Git Pull'
         } elseif ($Action -eq 'SmokeSuccess') {
             'Success smoke test'
+        } elseif ($Action -eq 'SmokeInheritedOutput') {
+            'Inherited-output smoke test'
         } else {
             'Cancellation smoke test'
         }
@@ -1287,6 +1327,12 @@ function Select-SavedProjectAction {
 
         $arguments = if ($Action -eq 'SmokeSuccess') {
             @('-NoProfile', '-Command', 'Write-Output ''Smoke operation completed successfully.''; exit 0')
+        } elseif ($Action -eq 'SmokeInheritedOutput') {
+            @(
+                '-NoProfile',
+                '-Command',
+                '$child = Start-Process powershell.exe -ArgumentList ''-NoProfile -Command "Start-Sleep -Seconds 4"'' -NoNewWindow -PassThru; Write-Output "Inherited-output child PID: $($child.Id)"; Write-Output ''Immediate parent completed.''; exit 0'
+            )
         } elseif ($Action -eq 'SmokeCancel') {
             @(
                 '-NoProfile',
@@ -1422,7 +1468,11 @@ function Select-SavedProjectAction {
 
     $form.Add_Shown({
         if ($UiSmokeTest -and -not $UiSmokeTestOperation -and -not $UiSmokeTestOperationSuccess -and
-            -not $UiSmokeTestCancellation -and -not $UiSmokeTestStatusRefresh) {
+            -not $UiSmokeTestCancellation -and -not $UiSmokeTestStatusRefresh -and -not $UiSmokeTestInheritedOutput) {
+            if ($taskbarIdentityAvailable -and -not $taskbarIdentityState.Applied) {
+                throw "Taskbar identity could not be applied: $($taskbarIdentityState.Error)"
+            }
+            Write-Host "UI taskbar identity: $appUserModelId"
             $form.ClientSize = New-Object System.Drawing.Size(940, 700)
             & $layoutDashboard
             $form.Close()
@@ -1441,6 +1491,10 @@ function Select-SavedProjectAction {
                 $cancelOperation.PerformClick()
             })
             $dashboardState.SmokeCancelTimer.Start()
+            return
+        }
+        elseif ($UiSmokeTestInheritedOutput) {
+            & $startOperation 'SmokeInheritedOutput'
             return
         }
         elseif ($UiSmokeTestOperation) {

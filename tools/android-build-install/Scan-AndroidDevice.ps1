@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'AndroidFileHash.ps1')
 
 # Windows PowerShell 5.1 can bind a single null/empty placeholder to a
 # ValueFromRemainingArguments array even when the caller supplied no trailing
@@ -403,7 +404,7 @@ foreach ($projectPath in $validProjects) {
         continue
     }
 
-    $localHash = (Get-FileHash -LiteralPath $local.Apk.FullName -Algorithm SHA256).Hash
+    $localHash = Get-AndroidFileSha256 -LiteralPath $local.Apk.FullName
     $paths = Invoke-NativeCaptured -FilePath $adb -Arguments @('-s', $serial, 'shell', 'pm', 'path', $packageId)
     if ($paths.ExitCode -ne 0) {
         New-ScanResult -ProjectPath $projectPath -Status 'Unknown' -PackageId $packageId -LocalApk $local.Apk.FullName -LocalHash $localHash -Detail "adb failed while querying the installed package: $($paths.Output -join ' ')" -Device $serial
@@ -432,7 +433,7 @@ foreach ($projectPath in $validProjects) {
             continue
         }
 
-        $installedHash = (Get-FileHash -LiteralPath $tempApk -Algorithm SHA256).Hash
+        $installedHash = Get-AndroidFileSha256 -LiteralPath $tempApk
         $status = if ($installedHash -eq $localHash) { 'Same' } else { 'Different' }
         $detail = "Local APK: $($local.Apk.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
         if ($local.Detail) { $detail = "$detail. $($local.Detail)" }

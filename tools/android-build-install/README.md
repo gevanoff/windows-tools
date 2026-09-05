@@ -37,11 +37,30 @@ The available actions are:
 
 The dashboard is resizable and scales with Windows display settings. It uses a distinct phone/build/install icon in the window, taskbar, and notification area so it is easy to distinguish from a generic PowerShell window. Double-clicking a project and pressing Enter both run the primary **Sync & Run** action. **Build & Install** remains available when an unconditional rebuild is wanted.
 
+## Start menu and taskbar shortcut
+
+Double-click `Install-Start-Menu-Shortcut.bat` once to install a per-user **Android Build and Install** shortcut. It uses the tool's own icon and does not require administrator access.
+
+To pin it on Windows 11:
+
+1. Open Start and search for **Android Build and Install**.
+2. Right-click the result and choose **Pin to taskbar**. If Windows puts the action under a submenu, choose **More**, then **Pin to taskbar**.
+
+You can also launch the dashboard normally, right-click its distinct taskbar icon while it is running, and choose **Pin to taskbar**. The dashboard supplies Windows with a stable application identity, relaunch command, display name, and icon resource, so the pinned item starts this tool rather than a generic PowerShell window.
+
+The shortcut points to this checkout. If the repository is moved, run the installer again from its new location. To remove the Start menu shortcut, run:
+
+```powershell
+.\Install-AndroidBuildInstallShortcut.ps1 -Remove
+```
+
 ### Operation output and cancellation
 
 Sync & Run, Build & Install, and the explicit Git Pull action run in the background while the dashboard remains open for the entire operation. The **Operation output** panel streams PowerShell, Gradle, Git, and ADB output; **Copy Output** copies the visible transcript for troubleshooting. The normal completion, failure, or cancellation result remains visible in the dashboard instead of closing the window.
 
 Use **Cancel** to stop the active PowerShell process and its child process tree, including a running Gradle or ADB command. Closing the dashboard during an operation asks for confirmation before requesting the same cancellation. Dashboard output is bounded so a very large Gradle transcript does not consume memory indefinitely; the complete build/install output remains in the saved report.
+
+Build stages execute inside a single logging wrapper rather than a nested redirected PowerShell process. When Gradle starts a persistent daemon, the dashboard waits for the actual build/install process—not for output handles inherited by that daemon—so a successful install can complete immediately while the reusable Gradle daemon remains available for later builds.
 
 Background dashboard operations never wait for hidden console input. If multiple Gradle roots, devices, or APKs require a choice, the operation stops with an actionable message directing you to select a narrower project folder or save the appropriate project setting.
 
@@ -272,7 +291,7 @@ The tool does **not** automatically uninstall an app when Android reports `INSTA
 
 Click **Scan Device...** to compare existing local debug APKs with packages currently installed on the appropriate attached device. The scan does not rebuild or install anything.
 
-Results include **Same**, **Different**, **Not installed**, **No local build**, and **Unknown**. The scanner identifies package IDs using Android Build-Tools, queries the installed package with ADB, temporarily pulls a single installed APK when possible, computes SHA-256 hashes, and removes the temporary copy afterward.
+Results include **Same**, **Different**, **Not installed**, **No local build**, and **Unknown**. The scanner identifies package IDs using Android Build-Tools, queries the installed package with ADB, temporarily pulls a single installed APK when possible, computes SHA-256 hashes with the built-in .NET cryptography provider, and removes the temporary copy afterward.
 
 Split APK installations and other cases where byte-for-byte comparison is not reliable are reported as **Unknown** rather than guessed.
 
@@ -362,12 +381,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Test-AndroidBuildInsta
 
 It uses an isolated temporary project and state directory; no Android device,
 real JDK, Gradle download, or additional test framework is required. The check
-covers PowerShell parsing, loading the multi-size app/tray icon, a configured
-`JAVA_HOME`, paths containing spaces, a successful up-to-date build becoming
-fresh, scanner parameter binding, dashboard and settings UI creation/resizing,
-asynchronous dashboard operation completion, cancellation of an exact child
-process tree, progressive status refresh, and a non-destructive expected failure
-path.
+covers PowerShell parsing, taskbar identity and Start menu shortcut creation,
+loading the multi-size app/tray icon, a configured `JAVA_HOME`, paths containing
+spaces, a successful up-to-date build becoming fresh, scanner parameter binding,
+dashboard and settings UI creation/resizing, asynchronous dashboard operation
+completion, cancellation of an exact child process tree, bounded completion when
+a persistent descendant inherits an output handle, progressive status refresh,
+and a non-destructive expected failure path.
 
 ## Possible future improvements
 
