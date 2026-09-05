@@ -9,7 +9,8 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [switch]$SuppressSuccessDialog,
-    [switch]$NoUi
+    [switch]$NoUi,
+    [Parameter(DontShow = $true)][switch]$NoProcessExit
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,21 +28,18 @@ $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $logPath = Join-Path $logRoot "android-build-install-$timestamp.log"
 $implementation = Join-Path $PSScriptRoot 'Invoke-AndroidBuildInstall.ps1'
 
-$childArguments = @(
-    '-NoProfile',
-    '-ExecutionPolicy', 'Bypass',
-    '-File', $implementation,
-    '-Project', $Project,
-    '-GradleTask', $GradleTask
-)
-if ($DeviceSerial) { $childArguments += @('-DeviceSerial', $DeviceSerial) }
-if ($PreferredApk) { $childArguments += @('-PreferredApk', $PreferredApk) }
-if ($JavaHome) { $childArguments += @('-JavaHome', $JavaHome) }
-if ($AutoLaunch) { $childArguments += '-AutoLaunch' }
-if ($SkipBuild) { $childArguments += '-SkipBuild' }
-if ($SkipInstall) { $childArguments += '-SkipInstall' }
-if ($SuppressSuccessDialog) { $childArguments += '-SuppressSuccessDialog' }
-if ($NoUi) { $childArguments += '-NoUi' }
+$implementationParameters = @{
+    Project = $Project
+    GradleTask = $GradleTask
+}
+if ($DeviceSerial) { $implementationParameters.DeviceSerial = $DeviceSerial }
+if ($PreferredApk) { $implementationParameters.PreferredApk = $PreferredApk }
+if ($JavaHome) { $implementationParameters.JavaHome = $JavaHome }
+if ($AutoLaunch) { $implementationParameters.AutoLaunch = $true }
+if ($SkipBuild) { $implementationParameters.SkipBuild = $true }
+if ($SkipInstall) { $implementationParameters.SkipInstall = $true }
+if ($SuppressSuccessDialog) { $implementationParameters.SuppressSuccessDialog = $true }
+if ($NoUi) { $implementationParameters.NoUi = $true }
 
 @(
     'Android Build and Install',
@@ -68,13 +66,19 @@ $previousPreference = $ErrorActionPreference
 $exitCode = 1
 try {
     $ErrorActionPreference = 'Continue'
-    & powershell.exe @childArguments 2>&1 |
+    & $implementation @implementationParameters -NoProcessExit *>&1 |
         ForEach-Object {
             $line = "$_"
             Write-Host $line
             Add-Content -LiteralPath $logPath -Encoding UTF8 -Value $line
         }
-    $exitCode = [int]$LASTEXITCODE
+    $exitCode = 0
+}
+catch {
+    $line = "$_"
+    Write-Host $line
+    Add-Content -LiteralPath $logPath -Encoding UTF8 -Value $line
+    $exitCode = 1
 }
 finally {
     $ErrorActionPreference = $previousPreference
@@ -106,4 +110,8 @@ The log will now open in Notepad so the actual Gradle or adb error can be copied
     Start-Process notepad.exe -ArgumentList "`"$logPath`""
 }
 
+if ($NoProcessExit) {
+    if ($exitCode -ne 0) { throw "Android build/install stage failed. See the detailed log: $logPath" }
+    return
+}
 exit $exitCode

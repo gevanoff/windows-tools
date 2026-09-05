@@ -8,7 +8,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+. (Join-Path $PSScriptRoot 'WindowsTaskbarIdentity.ps1')
 [System.Windows.Forms.Application]::EnableVisualStyles()
+try { [WindowsTools.TaskbarIdentity]::SetCurrentProcessAppId((Get-AndroidBuildInstallAppId)) }
+catch { Write-Verbose "Could not set the settings-window taskbar identity: $($_.Exception.Message)" }
 
 $appIconPath = Join-Path $PSScriptRoot 'assets\android-build-install.ico'
 $appIcon = $null

@@ -61,16 +61,28 @@ function Get-Preference {
 function Invoke-Child {
     param(
         [Parameter(Mandatory = $true)][string]$File,
-        [string[]]$Arguments = @()
+        [string[]]$Arguments = @(),
+        [hashtable]$Parameters = @{},
+        [switch]$InProcess
     )
 
     $previousPreference = $ErrorActionPreference
     $exitCode = 1
     try {
         $ErrorActionPreference = 'Continue'
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $File @Arguments 2>&1 |
-            ForEach-Object { Write-Host "$_" }
-        $exitCode = [int]$LASTEXITCODE
+        if ($InProcess) {
+            & $File @Parameters -NoProcessExit *>&1 | ForEach-Object { Write-Host "$_" }
+            $exitCode = 0
+        }
+        else {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $File @Arguments 2>&1 |
+                ForEach-Object { Write-Host "$_" }
+            $exitCode = [int]$LASTEXITCODE
+        }
+    }
+    catch {
+        Write-Host "$_"
+        $exitCode = 1
     }
     finally {
         $ErrorActionPreference = $previousPreference
@@ -176,17 +188,17 @@ try {
         Write-Host ''
         Write-Host "Local build is '$($status.BuildStatus)'; building before device comparison..."
 
-        $buildArgs = @(
-            '-Project', $projectPath,
-            '-GradleTask', $preference.gradleTask,
-            '-SkipInstall',
-            '-SuppressSuccessDialog'
-        )
-        if ($NoUi) { $buildArgs += '-NoUi' }
-        if ($preference.preferredApk) { $buildArgs += @('-PreferredApk', $preference.preferredApk) }
-        if ($preference.javaHome) { $buildArgs += @('-JavaHome', $preference.javaHome) }
+        $buildParameters = @{
+            Project = $projectPath
+            GradleTask = $preference.gradleTask
+            SkipInstall = $true
+            SuppressSuccessDialog = $true
+        }
+        if ($NoUi) { $buildParameters.NoUi = $true }
+        if ($preference.preferredApk) { $buildParameters.PreferredApk = $preference.preferredApk }
+        if ($preference.javaHome) { $buildParameters.JavaHome = $preference.javaHome }
 
-        $buildExit = Invoke-Child -File $runner -Arguments $buildArgs
+        $buildExit = Invoke-Child -File $runner -Parameters $buildParameters -InProcess
         if ($buildExit -ne 0) { throw "Build stage failed with exit code $buildExit." }
         $actions.Add('Build: rebuilt local APK.')
 
@@ -219,20 +231,20 @@ try {
         $actions.Add('Install: device already has the same APK; install skipped.')
 
         if ($preference.autoLaunch) {
-            $launchArgs = @(
-                '-Project', $projectPath,
-                '-GradleTask', $preference.gradleTask,
-                '-SkipBuild',
-                '-SkipInstall',
-                '-AutoLaunch',
-                '-SuppressSuccessDialog'
-            )
-            if ($NoUi) { $launchArgs += '-NoUi' }
-            if ($preference.preferredApk) { $launchArgs += @('-PreferredApk', $preference.preferredApk) }
-            if ($preference.javaHome) { $launchArgs += @('-JavaHome', $preference.javaHome) }
-            if ($preference.deviceSerial) { $launchArgs += @('-DeviceSerial', $preference.deviceSerial) }
+            $launchParameters = @{
+                Project = $projectPath
+                GradleTask = $preference.gradleTask
+                SkipBuild = $true
+                SkipInstall = $true
+                AutoLaunch = $true
+                SuppressSuccessDialog = $true
+            }
+            if ($NoUi) { $launchParameters.NoUi = $true }
+            if ($preference.preferredApk) { $launchParameters.PreferredApk = $preference.preferredApk }
+            if ($preference.javaHome) { $launchParameters.JavaHome = $preference.javaHome }
+            if ($preference.deviceSerial) { $launchParameters.DeviceSerial = $preference.deviceSerial }
 
-            $launchExit = Invoke-Child -File $runner -Arguments $launchArgs
+            $launchExit = Invoke-Child -File $runner -Parameters $launchParameters -InProcess
             if ($launchExit -ne 0) { throw "Launch stage failed with exit code $launchExit." }
             $actions.Add('Launch: app launch requested.')
         }
@@ -241,19 +253,19 @@ try {
         }
     }
     else {
-        $installArgs = @(
-            '-Project', $projectPath,
-            '-GradleTask', $preference.gradleTask,
-            '-SkipBuild',
-            '-SuppressSuccessDialog'
-        )
-        if ($NoUi) { $installArgs += '-NoUi' }
-        if ($preference.preferredApk) { $installArgs += @('-PreferredApk', $preference.preferredApk) }
-        if ($preference.javaHome) { $installArgs += @('-JavaHome', $preference.javaHome) }
-        if ($preference.deviceSerial) { $installArgs += @('-DeviceSerial', $preference.deviceSerial) }
-        if ($preference.autoLaunch) { $installArgs += '-AutoLaunch' }
+        $installParameters = @{
+            Project = $projectPath
+            GradleTask = $preference.gradleTask
+            SkipBuild = $true
+            SuppressSuccessDialog = $true
+        }
+        if ($NoUi) { $installParameters.NoUi = $true }
+        if ($preference.preferredApk) { $installParameters.PreferredApk = $preference.preferredApk }
+        if ($preference.javaHome) { $installParameters.JavaHome = $preference.javaHome }
+        if ($preference.deviceSerial) { $installParameters.DeviceSerial = $preference.deviceSerial }
+        if ($preference.autoLaunch) { $installParameters.AutoLaunch = $true }
 
-        $installExit = Invoke-Child -File $runner -Arguments $installArgs
+        $installExit = Invoke-Child -File $runner -Parameters $installParameters -InProcess
         if ($installExit -ne 0) { throw "Install stage failed with exit code $installExit." }
         $actions.Add("Install: completed because device state was '$deviceStatus'.")
         if ($preference.autoLaunch) { $actions.Add('Launch: app launch requested.') }
